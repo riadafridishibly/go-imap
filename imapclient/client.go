@@ -141,6 +141,7 @@ func (options *Options) dialer() *net.Dialer {
 // Authenticate, Idle) block the client during their execution.
 type Client struct {
 	conn     net.Conn
+	tlsConn  *tls.Conn
 	options  Options
 	br       *bufio.Reader
 	bw       *bufio.Writer
