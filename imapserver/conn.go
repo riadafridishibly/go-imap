@@ -282,6 +282,7 @@ func (c *Conn) readCommand(dec *imapwire.Decoder) error {
 		err = c.handleSearch(tag, dec, numKind)
 	case "COMPRESS":
 		err = c.handleCompress(tag, dec)
+		sendOK = false
 	default:
 		if c.state == imap.ConnStateNotAuthenticated {
 			// Don't allow a single unknown command before authentication to
