@@ -57,7 +57,7 @@ func (c *Client) upgradeCompress(compress *compressCommand) {
 	if buf.Len() > 0 {
 		r = io.MultiReader(&buf, conn)
 	} else {
-		r = c.conn
+		r = conn
 	}
 
 	w, err := flate.NewWriter(conn, flate.DefaultCompression)
