@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/flate"
 	"io"
+
+	"github.com/emersion/go-imap/v2/internal"
 )
 
 // CompressOptions contains options for Client.Compress.
@@ -68,7 +70,7 @@ func (c *Client) upgradeCompress(compress *compressCommand) {
 		io.Writer
 	}{
 		Reader: flate.NewReader(r),
-		Writer: w,
+		Writer: internal.FlateWriter{Writer: w},
 	})
 
 	c.br.Reset(rw)

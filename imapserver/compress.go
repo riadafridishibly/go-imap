@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/internal"
 	"github.com/emersion/go-imap/v2/internal/imapwire"
 )
 
@@ -77,7 +78,7 @@ func (c *Conn) handleCompress(tag string, dec *imapwire.Decoder) error {
 		io.Writer
 	}{
 		Reader: flate.NewReader(r),
-		Writer: w,
+		Writer: internal.FlateWriter{Writer: w},
 	})
 	c.br.Reset(rw)
 	c.bw.Reset(rw)
