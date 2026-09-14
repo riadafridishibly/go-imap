@@ -209,12 +209,197 @@ var bodyStructureTests = []struct {
 			Subtype: "MIXED",
 		},
 	},
+	{
+		name: "message/global, IMAP4rev1 form, MD5 string",
+		data: `("MESSAGE" "GLOBAL" NIL NIL NIL "7BIT" 120 "abc" ("ATTACHMENT" NIL) ("EN" "FR") "loc")`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "GLOBAL",
+			Encoding: "7BIT",
+			Size:     120,
+			Extended: &imap.BodyStructureSinglePartExt{
+				Disposition: &imap.BodyStructureDisposition{Value: "ATTACHMENT"},
+				Language:    []string{"EN", "FR"},
+				Location:    "loc",
+			},
+		},
+	},
+	{
+		name: "message/global, IMAP4rev1 form, language and location",
+		data: `("MESSAGE" "GLOBAL" NIL NIL NIL "7BIT" 120 NIL ("ATTACHMENT" NIL) "EN" "loc")`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "GLOBAL",
+			Encoding: "7BIT",
+			Size:     120,
+			Extended: &imap.BodyStructureSinglePartExt{
+				Disposition: &imap.BodyStructureDisposition{Value: "ATTACHMENT"},
+				Language:    []string{"EN"},
+				Location:    "loc",
+			},
+		},
+	},
+	{
+		name: "message/rfc822, NIL envelope, literal media type",
+		data: "(\"MESSAGE\" \"RFC822\" NIL NIL NIL \"7BIT\" 120 NIL ({4}\r\nTEXT \"PLAIN\" NIL NIL NIL \"7BIT\" 10 1) 4)",
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "RFC822",
+			Encoding: "7BIT",
+			Size:     120,
+			MessageRFC822: &imap.BodyStructureMessageRFC822{
+				BodyStructure: testBodyInnerPart,
+				NumLines:      4,
+			},
+		},
+	},
+	{
+		name: "message/rfc822, NIL envelope, long media type",
+		data: `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL ("` + strings.Repeat("X", 5000) + `" "PLAIN" NIL NIL NIL "7BIT" 10) 4)`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "RFC822",
+			Encoding: "7BIT",
+			Size:     120,
+			MessageRFC822: &imap.BodyStructureMessageRFC822{
+				BodyStructure: &imap.BodyStructureSinglePart{
+					Type:     strings.Repeat("X", 5000),
+					Subtype:  "PLAIN",
+					Encoding: "7BIT",
+					Size:     10,
+				},
+				NumLines: 4,
+			},
+		},
+	},
+	{
+		name: "message/rfc822, NIL envelope, multipart body with no children",
+		data: `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL ("ALTERNATIVE" ("BOUNDARY" "x") NIL NIL) 4)`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "RFC822",
+			Encoding: "7BIT",
+			Size:     120,
+			MessageRFC822: &imap.BodyStructureMessageRFC822{
+				BodyStructure: &imap.BodyStructureMultiPart{
+					Subtype: "ALTERNATIVE",
+					Extended: &imap.BodyStructureMultiPartExt{
+						Params: map[string]string{"boundary": "x"},
+					},
+				},
+				NumLines: 4,
+			},
+		},
+	},
+	{
+		name: "message/rfc822, NIL envelope, multipart body with no children and no extension data",
+		data: `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL ("ALTERNATIVE") 4)`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "RFC822",
+			Encoding: "7BIT",
+			Size:     120,
+			MessageRFC822: &imap.BodyStructureMessageRFC822{
+				BodyStructure: &imap.BodyStructureMultiPart{Subtype: "ALTERNATIVE"},
+				NumLines:      4,
+			},
+		},
+	},
+	{
+		name: "Dovecot, message/global",
+		// https://github.com/emersion/go-imap/issues/678
+		data: `(((("text" "plain" ("charset" "UTF-8") NIL NIL "quoted-printable" 576 31 NIL NIL NIL NIL)("text" "html" ("charset" "UTF-8") NIL NIL "quoted-printable" 4691 112 NIL NIL NIL NIL) "alternative" ("boundary" "----=_NextPart_002_0063_01D85E63.43189F50") NIL NIL NIL)("image" "png" ("name" "image001.png") "<image001.png@01D85E63.36D4F950>" NIL "base64" 3832 NIL NIL NIL NIL) "related" ("boundary" "----=_NextPart_001_0062_01D85E63.43189F50") NIL NIL NIL)("message" "delivery-status" ("name" "details.txt") NIL NIL "7bit" 594 NIL ("attachment" ("filename" "details.txt")) NIL NIL)("message" "global" ("name" "Untitled attachment 00019.dat") NIL NIL "7bit" 6726 NIL ("attachment" ("filename" "Untitled attachment 00019.dat")) NIL NIL) "mixed" ("boundary" "----=_NextPart_000_0061_01D85E63.43189F50") NIL ("en-us") NIL)`,
+		want: &imap.BodyStructureMultiPart{
+			Children: []imap.BodyStructure{
+				&imap.BodyStructureMultiPart{
+					Children: []imap.BodyStructure{
+						&imap.BodyStructureMultiPart{
+							Children: []imap.BodyStructure{
+								&imap.BodyStructureSinglePart{
+									Type:     "text",
+									Subtype:  "plain",
+									Params:   map[string]string{"charset": "UTF-8"},
+									Encoding: "quoted-printable",
+									Size:     576,
+									Text:     &imap.BodyStructureText{NumLines: 31},
+									Extended: &imap.BodyStructureSinglePartExt{},
+								},
+								&imap.BodyStructureSinglePart{
+									Type:     "text",
+									Subtype:  "html",
+									Params:   map[string]string{"charset": "UTF-8"},
+									Encoding: "quoted-printable",
+									Size:     4691,
+									Text:     &imap.BodyStructureText{NumLines: 112},
+									Extended: &imap.BodyStructureSinglePartExt{},
+								},
+							},
+							Subtype: "alternative",
+							Extended: &imap.BodyStructureMultiPartExt{
+								Params: map[string]string{"boundary": "----=_NextPart_002_0063_01D85E63.43189F50"},
+							},
+						},
+						&imap.BodyStructureSinglePart{
+							Type:     "image",
+							Subtype:  "png",
+							Params:   map[string]string{"name": "image001.png"},
+							ID:       "<image001.png@01D85E63.36D4F950>",
+							Encoding: "base64",
+							Size:     3832,
+							Extended: &imap.BodyStructureSinglePartExt{},
+						},
+					},
+					Subtype: "related",
+					Extended: &imap.BodyStructureMultiPartExt{
+						Params: map[string]string{"boundary": "----=_NextPart_001_0062_01D85E63.43189F50"},
+					},
+				},
+				&imap.BodyStructureSinglePart{
+					Type:     "message",
+					Subtype:  "delivery-status",
+					Params:   map[string]string{"name": "details.txt"},
+					Encoding: "7bit",
+					Size:     594,
+					Extended: &imap.BodyStructureSinglePartExt{
+						Disposition: &imap.BodyStructureDisposition{
+							Value:  "attachment",
+							Params: map[string]string{"filename": "details.txt"},
+						},
+					},
+				},
+				&imap.BodyStructureSinglePart{
+					Type:     "message",
+					Subtype:  "global",
+					Params:   map[string]string{"name": "Untitled attachment 00019.dat"},
+					Encoding: "7bit",
+					Size:     6726,
+					Extended: &imap.BodyStructureSinglePartExt{
+						Disposition: &imap.BodyStructureDisposition{
+							Value:  "attachment",
+							Params: map[string]string{"filename": "Untitled attachment 00019.dat"},
+						},
+					},
+				},
+			},
+			Subtype: "mixed",
+			Extended: &imap.BodyStructureMultiPartExt{
+				Params:   map[string]string{"boundary": "----=_NextPart_000_0061_01D85E63.43189F50"},
+				Language: []string{"en-us"},
+			},
+		},
+	},
+}
+
+func newTestBodyDecoder(data string) *imapwire.Decoder {
+	// Read one byte at a time, so that parsing doesn't depend on buffering
+	r := iotest.OneByteReader(strings.NewReader(data + "\r\n"))
+	return imapwire.NewDecoder(bufio.NewReader(r), imapwire.ConnSideClient)
 }
 
 func TestReadBody(t *testing.T) {
 	for _, tc := range bodyStructureTests {
 		t.Run(tc.name, func(t *testing.T) {
-			dec := imapwire.NewDecoder(bufio.NewReader(iotest.OneByteReader(strings.NewReader(tc.data+"\r\n"))), imapwire.ConnSideClient)
+			dec := newTestBodyDecoder(tc.data)
 			got, err := readBody(dec, &Options{})
 			if err != nil {
 				t.Fatalf("readBody() = %v", err)
@@ -229,36 +414,35 @@ func TestReadBody(t *testing.T) {
 	}
 }
 
-// Dovecot sends message/global parts in the IMAP4rev1 form. See:
-// https://github.com/emersion/go-imap/issues/678
-func TestReadBody_dovecotMessageGlobal(t *testing.T) {
-	const data = `(((("text" "plain" ("charset" "UTF-8") NIL NIL "quoted-printable" 576 31 NIL NIL NIL NIL)("text" "html" ("charset" "UTF-8") NIL NIL "quoted-printable" 4691 112 NIL NIL NIL NIL) "alternative" ("boundary" "----=_NextPart_002_0063_01D85E63.43189F50") NIL NIL NIL)("image" "png" ("name" "image001.png") "<image001.png@01D85E63.36D4F950>" NIL "base64" 3832 NIL NIL NIL NIL) "related" ("boundary" "----=_NextPart_001_0062_01D85E63.43189F50") NIL NIL NIL)("message" "delivery-status" ("name" "details.txt") NIL NIL "7bit" 594 NIL ("attachment" ("filename" "details.txt")) NIL NIL)("message" "global" ("name" "Untitled attachment 00019.dat") NIL NIL "7bit" 6726 NIL ("attachment" ("filename" "Untitled attachment 00019.dat")) NIL NIL) "mixed" ("boundary" "----=_NextPart_000_0061_01D85E63.43189F50") NIL ("en-us") NIL)`
-
-	dec := imapwire.NewDecoder(bufio.NewReader(strings.NewReader(data+"\r\n")), imapwire.ConnSideClient)
-	bs, err := readBody(dec, &Options{})
-	if err != nil {
-		t.Fatalf("readBody() = %v", err)
-	}
-
-	mpart, ok := bs.(*imap.BodyStructureMultiPart)
-	if !ok || len(mpart.Children) != 3 {
-		t.Fatalf("readBody() = %s, want multipart with 3 children", toJSON(bs))
-	}
-	want := &imap.BodyStructureSinglePart{
-		Type:     "message",
-		Subtype:  "global",
-		Params:   map[string]string{"name": "Untitled attachment 00019.dat"},
-		Encoding: "7bit",
-		Size:     6726,
-		Extended: &imap.BodyStructureSinglePartExt{
-			Disposition: &imap.BodyStructureDisposition{
-				Value:  "attachment",
-				Params: map[string]string{"filename": "Untitled attachment 00019.dat"},
-			},
+func TestReadBody_invalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantErr string
+	}{
+		{
+			name:    "NIL subtype",
+			data:    `("APPLICATION" NIL NIL NIL NIL "BASE64" 100 NIL ("ATTACHMENT" ("FILENAME" "x")) NIL NIL)`,
+			wantErr: `in body-type-1part: imapwire: expected string, got "N"`,
+		},
+		{
+			name:    "atom subtype",
+			data:    `("TEXT" PLAIN NIL NIL NIL "7BIT" 10 1)`,
+			wantErr: `in body-type-1part: imapwire: expected string, got "P"`,
+		},
+		{
+			name:    "message/rfc822, atom instead of envelope",
+			data:    `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 FOO ("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1) 4)`,
+			wantErr: `in body-type-1part: imapwire: expected NIL, got " "`,
 		},
 	}
-	if got := mpart.Children[2]; !reflect.DeepEqual(got, want) {
-		t.Errorf("part 3 = %s, want %s", toJSON(got), toJSON(want))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := readBody(newTestBodyDecoder(tc.data), &Options{})
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("readBody() = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 

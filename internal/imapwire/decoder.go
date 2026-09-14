@@ -122,19 +122,6 @@ func (dec *Decoder) acceptByte(want byte) bool {
 	return true
 }
 
-// Peek returns the next n bytes without consuming them. Fewer bytes are
-// returned if the input ends first or n exceeds the buffer size.
-func (dec *Decoder) Peek(n int) []byte {
-	if dec.literal {
-		return nil
-	}
-	b, err := dec.r.Peek(n)
-	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
-		dec.returnErr(err)
-	}
-	return b
-}
-
 // EOF returns true if end-of-file is reached.
 func (dec *Decoder) EOF() bool {
 	_, err := dec.r.ReadByte()
