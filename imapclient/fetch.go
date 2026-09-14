@@ -934,8 +934,20 @@ func readBody(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, erro
 		err       error
 	)
 	if dec.String(&mediaType) {
-		token = "body-type-1part"
-		bs, err = readBodyType1part(dec, mediaType, options)
+		var subtype string
+		hasSP := dec.SP()
+		if hasSP && dec.String(&subtype) {
+			token = "body-type-1part"
+			bs, err = readBodyType1part(dec, mediaType, subtype, options)
+		} else if dec.Err() != nil {
+			return nil, dec.Err()
+		} else {
+			// Some servers send a multipart body with no children, which
+			// body-type-mpart doesn't allow. The string is its subtype. See:
+			// https://github.com/emersion/go-imap/issues/701
+			token = "body-type-mpart"
+			bs, err = readBodyTypeMpartEmpty(dec, mediaType, hasSP, options)
+		}
 	} else {
 		token = "body-type-mpart"
 		bs, err = readBodyTypeMpart(dec, options)
@@ -957,10 +969,10 @@ func readBody(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, erro
 	return bs, nil
 }
 
-func readBodyType1part(dec *imapwire.Decoder, typ string, options *Options) (*imap.BodyStructureSinglePart, error) {
-	bs := imap.BodyStructureSinglePart{Type: typ}
+func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, options *Options) (*imap.BodyStructureSinglePart, error) {
+	bs := imap.BodyStructureSinglePart{Type: typ, Subtype: subtype}
 
-	if !dec.ExpectSP() || !dec.ExpectString(&bs.Subtype) || !dec.ExpectSP() {
+	if !dec.ExpectSP() {
 		return nil, dec.Err()
 	}
 	var err error
@@ -990,12 +1002,20 @@ func readBodyType1part(dec *imapwire.Decoder, typ string, options *Options) (*im
 		return &bs, nil
 	}
 
-	if strings.EqualFold(bs.Type, "message") && (strings.EqualFold(bs.Subtype, "rfc822") || strings.EqualFold(bs.Subtype, "global")) {
+	if strings.EqualFold(bs.Type, "message") && (strings.EqualFold(bs.Subtype, "rfc822") || strings.EqualFold(bs.Subtype, "global")) && hasBodyTypeMsgFields(dec) {
 		var msg imap.BodyStructureMessageRFC822
 
-		msg.Envelope, err = readEnvelope(dec, options)
-		if err != nil {
-			return nil, err
+		var atom string
+		if dec.Atom(&atom) {
+			// Some servers send NIL instead of an envelope
+			if !dec.Expect(atom == "NIL", "NIL") {
+				return nil, dec.Err()
+			}
+		} else {
+			msg.Envelope, err = readEnvelope(dec, options)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		if !dec.ExpectSP() {
@@ -1035,6 +1055,69 @@ func readBodyType1part(dec *imapwire.Decoder, typ string, options *Options) (*im
 	}
 
 	return &bs, nil
+}
+
+// hasBodyTypeMsgFields reports whether the envelope, body and line count of a
+// message/rfc822 or message/global part come next. Servers don't always send
+// them: IMAP4rev1 has none for message/global, and some servers omit them or
+// send NIL for the envelope of message/rfc822. See:
+// https://github.com/emersion/go-imap/issues/678
+func hasBodyTypeMsgFields(dec *imapwire.Decoder) bool {
+	var i int
+	next := func() byte {
+		b := dec.Peek(i + 1)
+		if len(b) <= i {
+			return 0
+		}
+		i++
+		return b[i-1]
+	}
+
+	switch next() {
+	case '(':
+		return true
+	case 'N':
+		if next() != 'I' || next() != 'L' {
+			return false
+		}
+	default:
+		return false
+	}
+
+	// NIL is either the envelope followed by body, or body-fld-md5 followed
+	// by body-fld-dsp. Both start with "(". A body continues with "(" or two
+	// strings, a body-fld-dsp with a string and body-fld-param.
+	ch := next()
+	if ch == ' ' {
+		ch = next()
+	}
+	if ch != '(' {
+		return false
+	}
+	switch next() {
+	case '(':
+		return true
+	case '"':
+		// Skip the quoted string below
+	default:
+		return false
+	}
+	for {
+		ch = next()
+		if ch == '\\' {
+			ch = next()
+		} else if ch == '"' {
+			break
+		}
+		if ch == 0 || ch == '\r' || ch == '\n' {
+			return false
+		}
+	}
+	ch = next()
+	if ch == ' ' {
+		ch = next()
+	}
+	return ch == '"' || ch == '{'
 }
 
 func readBodyExt1part(dec *imapwire.Decoder, options *Options) (*imap.BodyStructureSinglePartExt, error) {
@@ -1091,6 +1174,20 @@ func readBodyTypeMpart(dec *imapwire.Decoder, options *Options) (*imap.BodyStruc
 	}
 
 	if dec.SP() {
+		var err error
+		bs.Extended, err = readBodyExtMpart(dec, options)
+		if err != nil {
+			return nil, fmt.Errorf("in body-ext-mpart: %w", err)
+		}
+	}
+
+	return &bs, nil
+}
+
+func readBodyTypeMpartEmpty(dec *imapwire.Decoder, subtype string, hasSP bool, options *Options) (*imap.BodyStructureMultiPart, error) {
+	bs := imap.BodyStructureMultiPart{Subtype: subtype}
+
+	if hasSP {
 		var err error
 		bs.Extended, err = readBodyExtMpart(dec, options)
 		if err != nil {
