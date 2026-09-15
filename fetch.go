@@ -154,7 +154,7 @@ type BodyStructureSinglePart struct {
 	Encoding      string
 	Size          uint32
 
-	MessageRFC822 *BodyStructureMessageRFC822 // only for "message/rfc822"
+	MessageRFC822 *BodyStructureMessageRFC822 // only for "message/rfc822" and "message/global", may be nil
 	Text          *BodyStructureText          // only for "text/*"
 	Extended      *BodyStructureSinglePartExt
 }
@@ -192,7 +192,7 @@ func (*BodyStructureSinglePart) bodyStructure() {}
 // BodyStructureMessageRFC822 contains metadata specific to RFC 822 parts for
 // BodyStructureSinglePart.
 type BodyStructureMessageRFC822 struct {
-	Envelope      *Envelope
+	Envelope      *Envelope // nil if the server sent NIL
 	BodyStructure BodyStructure
 	NumLines      int64
 }
@@ -213,7 +213,7 @@ type BodyStructureSinglePartExt struct {
 
 // BodyStructureMultiPart is a body structure with multiple parts.
 type BodyStructureMultiPart struct {
-	Children []BodyStructure
+	Children []BodyStructure // empty if the server sent a multipart with no parts
 	Subtype  string
 
 	Extended *BodyStructureMultiPartExt
