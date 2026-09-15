@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/internal"
-	"github.com/emersion/go-imap/v2/internal/imapwire"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/internal"
+	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
 )
 
 // defaultAppendLimit is the default maximum size of an APPEND payload.

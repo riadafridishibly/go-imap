@@ -2,9 +2,10 @@ package imapclient
 
 import (
 	"fmt"
+	"slices"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/internal/imapwire"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
 )
 
 // GetQuota sends a GETQUOTA command.
@@ -61,12 +62,7 @@ func (c *Client) handleQuota() error {
 		case *GetQuotaCommand:
 			return cmd.root == data.Root
 		case *GetQuotaRootCommand:
-			for _, root := range cmd.roots {
-				if root == data.Root {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(cmd.roots, data.Root)
 		default:
 			return false
 		}

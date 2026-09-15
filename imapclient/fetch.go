@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/internal"
-	"github.com/emersion/go-imap/v2/internal/imapwire"
 	"github.com/emersion/go-message/mail"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/internal"
+	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
 )
 
 // Fetch sends a FETCH command.
@@ -704,7 +704,7 @@ func (c *Client) handleFetch(seqNum uint32) error {
 			item = FetchItemDataUID{UID: uid}
 		case "BODY", "BINARY":
 			if dec.Special('[') {
-				var section interface{}
+				var section any
 				switch attName {
 				case "BODY":
 					var err error

@@ -2,12 +2,12 @@ package imapmemserver
 
 import (
 	"bytes"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/imapserver"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/imapserver"
 )
 
 // Mailbox is an in-memory mailbox.
@@ -222,9 +222,7 @@ func (mbox *Mailbox) flagsLocked() []imap.Flag {
 		l = append(l, flag)
 	}
 
-	sort.Slice(l, func(i, j int) bool {
-		return l[i] < l[j]
-	})
+	slices.Sort(l)
 
 	return l
 }
@@ -258,8 +256,8 @@ func (mbox *Mailbox) expungeLocked(expunged map[*message]struct{}) (seqNums []ui
 
 	// Iterate in reverse order, to keep sequence numbers consistent
 	var filtered []*message
-	for i := len(mbox.l) - 1; i >= 0; i-- {
-		msg := mbox.l[i]
+	for i, msg := range slices.Backward(mbox.l) {
+
 		if _, ok := expunged[msg]; ok {
 			seqNum := uint32(i) + 1
 			seqNums = append(seqNums, seqNum)

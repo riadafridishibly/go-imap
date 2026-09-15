@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 // TestClient_Closed tests that the Closed() channel is closed when the

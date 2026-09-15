@@ -351,7 +351,7 @@ func TestNumRangeMerge(T *testing.T) {
 			continue
 		}
 		testOK := test.out != ""
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !testOK {
 				test.out = test.s
 			}
@@ -660,7 +660,7 @@ func TestParseNumSet(t *testing.T) {
 		r := make([]string, len(v))
 
 		// Try to find a permutation that hasn't been checked already
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			for i, j := range prng.Perm(len(v)) {
 				r[i] = v[j]
 			}

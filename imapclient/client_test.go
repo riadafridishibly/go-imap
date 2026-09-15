@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/imapclient"
-	"github.com/emersion/go-imap/v2/imapserver"
-	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/imapclient"
+	"github.com/riadafridishibly/go-imap/v2/imapserver"
+	"github.com/riadafridishibly/go-imap/v2/imapserver/imapmemserver"
 )
 
 const (

@@ -1,8 +1,8 @@
 package imapclient
 
 import (
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/internal/imapwire"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
 )
 
 // Copy sends a COPY command.

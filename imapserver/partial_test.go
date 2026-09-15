@@ -3,7 +3,7 @@ package imapserver
 import (
 	"testing"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 func TestExtractPartialOverflow(t *testing.T) {
