@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersion/go-imap/v2/internal/utf7"
+	"github.com/riadafridishibly/go-imap/v2/internal/utf7"
 )
 
 var decode = []struct {

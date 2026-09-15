@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/internal/utf7"
+	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2/internal/utf7"
 )
 
 // An Encoder writes IMAP data.
@@ -222,7 +222,7 @@ func (enc *Encoder) ModSeq(v uint64) *Encoder {
 // List writes a parenthesized list.
 func (enc *Encoder) List(n int, f func(i int)) *Encoder {
 	enc.Special('(')
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			enc.SP()
 		}

@@ -11,14 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 var errClosed = errors.New("imapserver: server closed")
 
 // Logger is a facility to log error messages.
 type Logger interface {
-	Printf(format string, args ...interface{})
+	Printf(format string, args ...any)
 }
 
 // Options contains server options.

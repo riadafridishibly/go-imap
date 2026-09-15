@@ -3,7 +3,7 @@ package imapclient
 import (
 	"fmt"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 // Enable sends an ENABLE command.
@@ -20,7 +20,7 @@ func (c *Client) Enable(caps ...imap.Cap) *EnableCommand {
 			done := make(chan error)
 			close(done)
 			err := fmt.Errorf("imapclient: cannot enable %q: not supported", name)
-			return &EnableCommand{commandBase: commandBase{done: done, err: err}}
+			return &EnableCommand{done: done, err: err}
 		}
 	}
 

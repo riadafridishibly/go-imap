@@ -5,7 +5,7 @@ import (
 
 	"github.com/emersion/go-sasl"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 func TestClient_Authenticate(t *testing.T) {

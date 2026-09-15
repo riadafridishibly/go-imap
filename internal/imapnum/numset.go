@@ -295,7 +295,7 @@ func parseNumRange(v string) (Range, error) {
 // ParseSet returns a new Set after parsing the set string.
 func ParseSet(set string) (Set, error) {
 	var s Set
-	for _, sv := range strings.Split(set, ",") {
+	for sv := range strings.SplitSeq(set, ",") {
 		r, err := parseNumRange(sv)
 		if err != nil {
 			return s, err

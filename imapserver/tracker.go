@@ -2,9 +2,10 @@ package imapserver
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 // MailboxTracker tracks the state of a mailbox.
@@ -270,8 +271,8 @@ func (t *SessionTracker) EncodeSeqNum(seqNum uint32) uint32 {
 		return 0
 	}
 
-	for i := len(t.queue) - 1; i >= 0; i-- {
-		update := t.queue[i]
+	for _, update := range slices.Backward(t.queue) {
+
 		// TODO: this doesn't handle increments > 1
 		if update.numMessages != 0 && seqNum == update.numMessages {
 			return 0

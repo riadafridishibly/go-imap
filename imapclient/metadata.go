@@ -2,8 +2,9 @@ package imapclient
 
 import (
 	"fmt"
+	"maps"
 
-	"github.com/emersion/go-imap/v2/internal/imapwire"
+	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
 )
 
 type GetMetadataDepth int
@@ -120,9 +121,7 @@ func (c *Client) handleMetadata() error {
 		}
 		// The server might send multiple METADATA responses for a single
 		// METADATA command
-		for k, v := range data.EntryValues {
-			cmd.data.Entries[k] = v
-		}
+		maps.Copy(cmd.data.Entries, data.EntryValues)
 	} else if handler := c.options.unilateralDataHandler().Metadata; handler != nil && len(data.EntryList) > 0 {
 		handler(data.Mailbox, data.EntryList)
 	}

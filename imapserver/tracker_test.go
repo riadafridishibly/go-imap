@@ -3,7 +3,7 @@ package imapserver_test
 import (
 	"testing"
 
-	"github.com/emersion/go-imap/v2/imapserver"
+	"github.com/riadafridishibly/go-imap/v2/imapserver"
 )
 
 type trackerUpdate struct {
@@ -128,7 +128,6 @@ var sessionTrackerSeqNumTests = []struct {
 
 func TestSessionTracker(t *testing.T) {
 	for _, tc := range sessionTrackerSeqNumTests {
-		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
 			mboxTracker := imapserver.NewMailboxTracker(42)
 			sessTracker := mboxTracker.NewSession()

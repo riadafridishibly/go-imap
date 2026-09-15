@@ -1,9 +1,10 @@
 package imapclient_test
 
 import (
+	"slices"
 	"testing"
 
-	"github.com/emersion/go-imap/v2"
+	"github.com/riadafridishibly/go-imap/v2"
 )
 
 func TestStore(t *testing.T) {
@@ -27,13 +28,7 @@ func TestStore(t *testing.T) {
 		t.Errorf("msg.SeqNum = %v, want %v", msg.SeqNum, 1)
 	}
 
-	found := false
-	for _, f := range msg.Flags {
-		if f == imap.FlagDeleted {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(msg.Flags, imap.FlagDeleted)
 	if !found {
 		t.Errorf("msg.Flags is missing deleted flag: %v", msg.Flags)
 	}

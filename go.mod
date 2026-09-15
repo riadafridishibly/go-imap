@@ -1,6 +1,6 @@
-module github.com/emersion/go-imap/v2
+module github.com/riadafridishibly/go-imap/v2
 
-go 1.18
+go 1.27
 
 require (
 	github.com/emersion/go-message v0.18.2
