@@ -1078,12 +1078,15 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, op
 		return &bs, nil
 	}
 
+	var (
+		ext  imap.BodyStructureSinglePartExt
+		next = bodyExt1partMD5
+	)
 	if strings.EqualFold(bs.Type, "message") && (strings.EqualFold(bs.Subtype, "rfc822") || strings.EqualFold(bs.Subtype, "global")) {
-		bs.MessageRFC822, bs.Extended, err = readBodyTypeMsg(dec, depth, options)
+		bs.MessageRFC822, next, hasSP, err = readBodyTypeMsg(dec, &ext, depth, options)
 		if err != nil {
 			return nil, err
 		}
-		return &bs, nil
 	} else if strings.EqualFold(bs.Type, "text") {
 		var text imap.BodyStructureText
 
@@ -1098,9 +1101,11 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, op
 	if !hasSP {
 		hasSP = dec.SP()
 	}
+	if hasSP || next != bodyExt1partMD5 {
+		bs.Extended = &ext
+	}
 	if hasSP {
-		bs.Extended, err = readBodyExt1part(dec, options)
-		if err != nil {
+		if err = readBodyExt1part(dec, &ext, next, options); err != nil {
 			return nil, fmt.Errorf("in body-ext-1part: %w", err)
 		}
 	}
@@ -1115,120 +1120,114 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, op
 // the envelope or body-fld-md5, and the body or body-fld-dsp after it, and
 // whether a line count follows, tells which. See:
 // https://github.com/emersion/go-imap/issues/678
-func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.BodyStructureMessageRFC822, *imap.BodyStructureSinglePartExt, error) {
-	var (
-		msg  imap.BodyStructureMessageRFC822
-		md5  string
-		atom string
-		err  error
-	)
+//
+// If there is no envelope, it returns a nil msg, and the values it read
+// belong to body-ext-1part: they are stored in ext, next is the first field
+// that wasn't read and hasSP reports whether the SP before it was read.
+// Otherwise, next is bodyExt1partMD5 and hasSP is false.
+func readBodyTypeMsg(dec *imapwire.Decoder, ext *imap.BodyStructureSinglePartExt, depth int, options *Options) (msg *imap.BodyStructureMessageRFC822, next bodyExt1partField, hasSP bool, err error) {
+	var md5, atom string
 	if dec.String(&md5) {
-		ext, err := readBodyExt1partAfterMD5(dec, options)
-		if err != nil {
-			return nil, nil, fmt.Errorf("in body-ext-1part: %w", err)
-		}
-		return nil, ext, nil
+		return nil, bodyExt1partDsp, false, nil
 	} else if dec.Atom(&atom) {
 		if atom != "NIL" {
-			return nil, nil, &imapwire.DecoderExpectError{
+			return nil, 0, false, &imapwire.DecoderExpectError{
 				Message: fmt.Sprintf("expected envelope or body-fld-md5, got %q", atom),
 			}
 		} else if !dec.SP() {
-			return nil, &imap.BodyStructureSinglePartExt{}, nil
+			return nil, bodyExt1partDsp, false, nil
 		}
 
+		msg = new(imap.BodyStructureMessageRFC822)
 		var dsp *imap.BodyStructureDisposition
 		msg.BodyStructure, dsp, err = readBodyOrFldDsp(dec, true, depth+1, options)
 		if err != nil {
-			return nil, nil, err
+			return nil, 0, false, err
 		}
 
-		hasSP := dec.SP()
+		hasSP = dec.SP()
 		if msg.BodyStructure != nil {
 			if !dec.Expect(hasSP, "SP") || !dec.ExpectNumber64(&msg.NumLines) {
-				return nil, nil, dec.Err()
+				return nil, 0, false, dec.Err()
 			}
 		} else if dsp != nil && hasSP && dec.Number64(&msg.NumLines) {
 			// ("string" body-fld-param) is either a body-fld-dsp or a
 			// multipart body with no children. A line count after it means
 			// the latter, since body-fld-lang is never a number.
 			if !isEmptyMpart(dsp.Value, dsp.Params) {
-				return nil, nil, errMissingSubtype
+				return nil, 0, false, errMissingSubtype
 			}
 			msg.BodyStructure = &imap.BodyStructureMultiPart{
 				Subtype:  dsp.Value,
 				Extended: &imap.BodyStructureMultiPartExt{Params: dsp.Params},
 			}
 		} else {
-			ext := imap.BodyStructureSinglePartExt{Disposition: dsp}
-			if hasSP {
-				ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
-				if err != nil {
-					return nil, nil, fmt.Errorf("in body-ext-1part: %w", err)
-				}
-			}
-			return nil, &ext, nil
+			// The NIL was body-fld-md5
+			ext.Disposition = dsp
+			return nil, bodyExt1partLang, hasSP, nil
 		}
-	} else {
-		msg.Envelope, err = readEnvelope(dec, options)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if !dec.ExpectSP() {
-			return nil, nil, dec.Err()
-		}
-
-		msg.BodyStructure, _, err = readBodyOrFldDsp(dec, false, depth+1, options)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if !dec.ExpectSP() || !dec.ExpectNumber64(&msg.NumLines) {
-			return nil, nil, dec.Err()
-		}
+		return msg, bodyExt1partMD5, false, nil
 	}
 
-	var ext *imap.BodyStructureSinglePartExt
-	if dec.SP() {
-		ext, err = readBodyExt1part(dec, options)
-		if err != nil {
-			return nil, nil, fmt.Errorf("in body-ext-1part: %w", err)
-		}
-	}
-
-	return &msg, ext, nil
-}
-
-func readBodyExt1part(dec *imapwire.Decoder, options *Options) (*imap.BodyStructureSinglePartExt, error) {
-	var md5 string
-	if !dec.ExpectNString(&md5) {
-		return nil, dec.Err()
-	}
-	return readBodyExt1partAfterMD5(dec, options)
-}
-
-func readBodyExt1partAfterMD5(dec *imapwire.Decoder, options *Options) (*imap.BodyStructureSinglePartExt, error) {
-	var ext imap.BodyStructureSinglePartExt
-
-	if !dec.SP() {
-		return &ext, nil
-	}
-
-	var err error
-	ext.Disposition, err = readBodyFldDsp(dec, options)
+	msg = new(imap.BodyStructureMessageRFC822)
+	msg.Envelope, err = readEnvelope(dec, options)
 	if err != nil {
-		return nil, fmt.Errorf("in body-fld-dsp: %w", err)
+		return nil, 0, false, err
 	}
 
-	if dec.SP() {
-		ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
-		if err != nil {
-			return nil, err
+	if !dec.ExpectSP() {
+		return nil, 0, false, dec.Err()
+	}
+
+	msg.BodyStructure, _, err = readBodyOrFldDsp(dec, false, depth+1, options)
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	if !dec.ExpectSP() || !dec.ExpectNumber64(&msg.NumLines) {
+		return nil, 0, false, dec.Err()
+	}
+
+	return msg, bodyExt1partMD5, false, nil
+}
+
+// bodyExt1partField is a field of body-ext-1part.
+type bodyExt1partField int
+
+const (
+	bodyExt1partMD5 bodyExt1partField = iota
+	bodyExt1partDsp
+	bodyExt1partLang
+)
+
+// readBodyExt1part reads body-ext-1part into ext, starting at the field next,
+// after the SP before it. next is bodyExt1partMD5 unless readBodyTypeMsg has
+// read the fields before it.
+func readBodyExt1part(dec *imapwire.Decoder, ext *imap.BodyStructureSinglePartExt, next bodyExt1partField, options *Options) error {
+	var err error
+
+	if next <= bodyExt1partMD5 {
+		var md5 string
+		if !dec.ExpectNString(&md5) {
+			return dec.Err()
+		}
+		if !dec.SP() {
+			return nil
 		}
 	}
 
-	return &ext, nil
+	if next <= bodyExt1partDsp {
+		ext.Disposition, err = readBodyFldDsp(dec, options)
+		if err != nil {
+			return fmt.Errorf("in body-fld-dsp: %w", err)
+		}
+		if !dec.SP() {
+			return nil
+		}
+	}
+
+	ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
+	return err
 }
 
 func readBodyTypeMpart(dec *imapwire.Decoder, depth int, options *Options) (*imap.BodyStructureMultiPart, error) {
