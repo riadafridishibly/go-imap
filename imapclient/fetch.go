@@ -1330,54 +1330,63 @@ func readBodyFldDsp(dec *imapwire.Decoder, options *Options) (*imap.BodyStructur
 }
 
 func readBodyFldParam(dec *imapwire.Decoder, options *Options) (map[string]string, error) {
-	var s string
-	if dec.Atom(&s) {
-		if !dec.Expect(s == "NIL", "NIL") {
-			return nil, dec.Err()
-		}
-		return nil, nil
-	}
-
-	params, isList, err := readBodyFldParamList(dec, options)
-	if err != nil {
+	var p bodyFldParamReader
+	if err := dec.ExpectNList(p.readString(dec, options)); err != nil {
 		return nil, err
-	} else if !dec.Expect(isList, "(") {
-		return nil, dec.Err()
 	}
-	return params, nil
+	return p.params()
 }
 
 // readBodyFldParamList reads body-fld-param if the next value is a list.
 // Otherwise, it consumes nothing and returns isList false.
 func readBodyFldParamList(dec *imapwire.Decoder, options *Options) (params map[string]string, isList bool, err error) {
-	var k string
-	isList, err = dec.List(func() error {
+	var p bodyFldParamReader
+	isList, err = dec.List(p.readString(dec, options))
+	if err != nil || !isList {
+		return nil, isList, err
+	}
+	params, err = p.params()
+	return params, true, err
+}
+
+// bodyFldParamReader collects the keys and values of a body-fld-param list.
+type bodyFldParamReader struct {
+	m map[string]string
+	k string
+}
+
+// readString returns a function that reads one string of the list, for
+// Decoder.List and Decoder.ExpectNList.
+func (p *bodyFldParamReader) readString(dec *imapwire.Decoder, options *Options) func() error {
+	return func() error {
 		var s string
 		if !dec.ExpectString(&s) {
 			return dec.Err()
 		}
 
-		if k == "" {
-			k = s
+		if p.k == "" {
+			p.k = s
 		} else {
-			if params == nil {
-				params = make(map[string]string)
+			if p.m == nil {
+				p.m = make(map[string]string)
 			}
 			decoded, _ := options.decodeText(s)
 			// TODO: handle error
 
-			params[strings.ToLower(k)] = decoded
-			k = ""
+			p.m[strings.ToLower(p.k)] = decoded
+			p.k = ""
 		}
 
 		return nil
-	})
-	if err != nil {
-		return nil, isList, err
-	} else if k != "" {
-		return nil, isList, fmt.Errorf("in body-fld-param: key without value")
 	}
-	return params, isList, nil
+}
+
+// params returns the parameters once the list has been read.
+func (p *bodyFldParamReader) params() (map[string]string, error) {
+	if p.k != "" {
+		return nil, fmt.Errorf("in body-fld-param: key without value")
+	}
+	return p.m, nil
 }
 
 func readBodyFldLang(dec *imapwire.Decoder) ([]string, error) {
