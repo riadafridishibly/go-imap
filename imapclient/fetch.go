@@ -922,8 +922,12 @@ func parseMsgIDList(s string) ([]string, error) {
 	return h.MsgIDList("In-Reply-To")
 }
 
+// maxBodyDepth limits how deeply bodies can be nested in multipart and
+// message/rfc822 parts, to prevent stack overflow.
+const maxBodyDepth = 1000
+
 func readBody(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, error) {
-	bs, _, err := readBodyOrFldDsp(dec, false, options)
+	bs, _, err := readBodyOrFldDsp(dec, false, 0, options)
 	return bs, err
 }
 
@@ -931,12 +935,18 @@ func readBody(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, erro
 // body-fld-dsp instead and return it with a nil body. Apart from multipart
 // bodies, both start with "(" and a string, and the next value tells which one
 // it is.
-func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, options *Options) (imap.BodyStructure, *imap.BodyStructureDisposition, error) {
+//
+// depth is the number of bodies enclosing this one.
+func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, depth int, options *Options) (imap.BodyStructure, *imap.BodyStructureDisposition, error) {
 	if !dec.Special('(') {
 		if !dec.Expect(allowDsp, "'('") || !dec.ExpectNIL() {
 			return nil, nil, dec.Err()
 		}
 		return nil, nil, nil
+	}
+
+	if depth >= maxBodyDepth {
+		return nil, nil, fmt.Errorf("body nested more than %v levels deep", maxBodyDepth)
 	}
 
 	var (
@@ -948,13 +958,13 @@ func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, options *Options) (i
 	)
 	if !dec.String(&mediaType) {
 		token = "body-type-mpart"
-		bs, err = readBodyTypeMpart(dec, options)
+		bs, err = readBodyTypeMpart(dec, depth, options)
 	} else if !dec.SP() {
 		// Multipart body with no children and no extension data, see below
 		bs = &imap.BodyStructureMultiPart{Subtype: mediaType}
 	} else if dec.String(&subtype) {
 		token = "body-type-1part"
-		bs, err = readBodyType1part(dec, mediaType, subtype, options)
+		bs, err = readBodyType1part(dec, mediaType, subtype, depth, options)
 	} else {
 		params, isList, err := readBodyFldParamList(dec, options)
 		if err != nil {
@@ -993,7 +1003,7 @@ func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, options *Options) (i
 	return bs, nil, nil
 }
 
-func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, options *Options) (*imap.BodyStructureSinglePart, error) {
+func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, options *Options) (*imap.BodyStructureSinglePart, error) {
 	bs := imap.BodyStructureSinglePart{Type: typ, Subtype: subtype}
 
 	if !dec.ExpectSP() {
@@ -1027,7 +1037,7 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, options *Opti
 	}
 
 	if strings.EqualFold(bs.Type, "message") && (strings.EqualFold(bs.Subtype, "rfc822") || strings.EqualFold(bs.Subtype, "global")) {
-		bs.MessageRFC822, bs.Extended, err = readBodyTypeMsg(dec, options)
+		bs.MessageRFC822, bs.Extended, err = readBodyTypeMsg(dec, depth, options)
 		if err != nil {
 			return nil, err
 		}
@@ -1063,7 +1073,7 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, options *Opti
 // the envelope or body-fld-md5, and the body or body-fld-dsp after it tells
 // which. See:
 // https://github.com/emersion/go-imap/issues/678
-func readBodyTypeMsg(dec *imapwire.Decoder, options *Options) (*imap.BodyStructureMessageRFC822, *imap.BodyStructureSinglePartExt, error) {
+func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.BodyStructureMessageRFC822, *imap.BodyStructureSinglePartExt, error) {
 	var (
 		msg  imap.BodyStructureMessageRFC822
 		md5  string
@@ -1084,7 +1094,7 @@ func readBodyTypeMsg(dec *imapwire.Decoder, options *Options) (*imap.BodyStructu
 		}
 
 		var dsp *imap.BodyStructureDisposition
-		msg.BodyStructure, dsp, err = readBodyOrFldDsp(dec, true, options)
+		msg.BodyStructure, dsp, err = readBodyOrFldDsp(dec, true, depth+1, options)
 		if err != nil {
 			return nil, nil, err
 		} else if msg.BodyStructure == nil {
@@ -1105,7 +1115,7 @@ func readBodyTypeMsg(dec *imapwire.Decoder, options *Options) (*imap.BodyStructu
 			return nil, nil, dec.Err()
 		}
 
-		msg.BodyStructure, err = readBody(dec, options)
+		msg.BodyStructure, _, err = readBodyOrFldDsp(dec, false, depth+1, options)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1155,11 +1165,11 @@ func readBodyExt1partAfterMD5(dec *imapwire.Decoder, options *Options) (*imap.Bo
 	return &ext, nil
 }
 
-func readBodyTypeMpart(dec *imapwire.Decoder, options *Options) (*imap.BodyStructureMultiPart, error) {
+func readBodyTypeMpart(dec *imapwire.Decoder, depth int, options *Options) (*imap.BodyStructureMultiPart, error) {
 	var bs imap.BodyStructureMultiPart
 
 	for {
-		child, err := readBody(dec, options)
+		child, _, err := readBodyOrFldDsp(dec, false, depth+1, options)
 		if err != nil {
 			return nil, err
 		}

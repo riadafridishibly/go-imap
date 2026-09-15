@@ -446,6 +446,45 @@ func TestReadBody_invalid(t *testing.T) {
 	}
 }
 
+func TestReadBody_depth(t *testing.T) {
+	const text = `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1)`
+	nest := func(depth int, open, close string) string {
+		return strings.Repeat(open, depth-1) + text + strings.Repeat(close, depth-1)
+	}
+	tests := []struct {
+		name  string
+		open  string
+		close string
+	}{
+		{"multipart", "(", ` "MIXED")`},
+		{"message/rfc822", `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 (NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL) `, ` 4)`},
+		{"message/rfc822, NIL envelope", `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL `, ` 4)`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := newTestBodyDecoder(nest(maxBodyDepth, tc.open, tc.close))
+			if _, err := readBody(dec, &Options{}); err != nil {
+				t.Fatalf("readBody() at max depth = %v", err)
+			}
+			if !dec.ExpectCRLF() {
+				t.Fatalf("ExpectCRLF() = %v", dec.Err())
+			}
+
+			_, err := readBody(newTestBodyDecoder(nest(maxBodyDepth+1, tc.open, tc.close)), &Options{})
+			if err == nil || !strings.Contains(err.Error(), "body nested more than") {
+				t.Errorf("readBody() past max depth = %v, want depth error", err)
+			}
+		})
+	}
+
+	t.Run("unterminated", func(t *testing.T) {
+		_, err := readBody(newTestBodyDecoder(strings.Repeat("(", 10_000_000)), &Options{})
+		if err == nil || !strings.Contains(err.Error(), "body nested more than") {
+			t.Errorf("readBody() = %v, want depth error", err)
+		}
+	})
+}
+
 func toJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
