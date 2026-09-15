@@ -647,11 +647,24 @@ func writeBodyType1part(enc *imapwire.Encoder, bs *imap.BodyStructureSinglePart,
 	writeNString(enc, ext.Location)
 }
 
+// emptyBodyStructure is written in place of the children of a multipart body
+// that has none, since body-type-mpart needs at least one. Dovecot does the
+// same.
+var emptyBodyStructure = &imap.BodyStructureSinglePart{
+	Type:     "text",
+	Subtype:  "plain",
+	Params:   map[string]string{"charset": "us-ascii"},
+	Encoding: "7bit",
+	Text:     &imap.BodyStructureText{},
+	Extended: &imap.BodyStructureSinglePartExt{},
+}
+
 func writeBodyTypeMpart(enc *imapwire.Encoder, bs *imap.BodyStructureMultiPart, extended bool) {
-	if len(bs.Children) == 0 {
-		panic("imapserver: imap.BodyStructureMultiPart must have at least one child")
+	children := bs.Children
+	if len(children) == 0 {
+		children = []imap.BodyStructure{emptyBodyStructure}
 	}
-	for _, child := range bs.Children {
+	for _, child := range children {
 		// ABNF for body-type-mpart doesn't have SP between body entries, and
 		// Outlook for iOS chokes on SP
 		writeBodyStructure(enc, child, extended)
