@@ -485,7 +485,7 @@ func TestReadBody_invalid(t *testing.T) {
 		{
 			name:    "message/rfc822, atom instead of envelope",
 			data:    `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 FOO ("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1) 4)`,
-			wantErr: `in body-type-1part: imapwire: expected NIL`,
+			wantErr: `in body-type-1part: imapwire: expected envelope or body-fld-md5, got "FOO"`,
 		},
 		{
 			name:    "missing subtype",

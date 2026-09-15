@@ -1129,8 +1129,10 @@ func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.
 		}
 		return nil, ext, nil
 	} else if dec.Atom(&atom) {
-		if !dec.Expect(atom == "NIL", "NIL") {
-			return nil, nil, dec.Err()
+		if atom != "NIL" {
+			return nil, nil, &imapwire.DecoderExpectError{
+				Message: fmt.Sprintf("expected envelope or body-fld-md5, got %q", atom),
+			}
 		} else if !dec.SP() {
 			return nil, &imap.BodyStructureSinglePartExt{}, nil
 		}
