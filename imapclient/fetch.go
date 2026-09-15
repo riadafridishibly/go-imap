@@ -1,6 +1,7 @@
 package imapclient
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	netmail "net/mail"
@@ -959,32 +960,13 @@ func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, depth int, options *
 	if !dec.String(&mediaType) {
 		token = "body-type-mpart"
 		bs, err = readBodyTypeMpart(dec, depth, options)
-	} else if !dec.SP() {
-		// Multipart body with no children and no extension data, see below
-		bs = &imap.BodyStructureMultiPart{Subtype: mediaType}
+	} else if !dec.ExpectSP() {
+		return nil, nil, fmt.Errorf("in body-type-1part: %w", dec.Err())
 	} else if dec.String(&subtype) {
 		token = "body-type-1part"
 		bs, err = readBodyType1part(dec, mediaType, subtype, depth, options)
 	} else {
-		params, isList, err := readBodyFldParamList(dec, options)
-		if err != nil {
-			return nil, nil, fmt.Errorf("in body-fld-param: %w", err)
-		} else if !isList && (!dec.Expect(allowDsp, "string") || !dec.ExpectNIL()) {
-			return nil, nil, fmt.Errorf("in body-type-1part: %w", dec.Err())
-		}
-
-		if allowDsp && dec.Special(')') {
-			return nil, &imap.BodyStructureDisposition{Value: mediaType, Params: params}, nil
-		}
-
-		// Some servers send a multipart body with no children, which
-		// body-type-mpart doesn't allow. The string is its subtype. See:
-		// https://github.com/emersion/go-imap/issues/701
-		ext, err := readBodyExtMpartAfterParam(dec, params, options)
-		if err != nil {
-			return nil, nil, fmt.Errorf("in body-type-mpart: in body-ext-mpart: %w", err)
-		}
-		bs = &imap.BodyStructureMultiPart{Subtype: mediaType, Extended: ext}
+		return readEmptyMpartOrFldDsp(dec, mediaType, allowDsp, options)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("in %v: %w", token, err)
@@ -1001,6 +983,66 @@ func readBodyOrFldDsp(dec *imapwire.Decoder, allowDsp bool, depth int, options *
 	}
 
 	return bs, nil, nil
+}
+
+// readEmptyMpartOrFldDsp reads the rest of a body after "(", a string and SP,
+// when no subtype string follows. body-type-mpart needs at least one child,
+// but some servers send a multipart body with no children: the string is its
+// subtype, and body-ext-mpart follows. See:
+// https://github.com/emersion/go-imap/issues/701
+//
+// If allowDsp is true, it can read a body-fld-dsp instead, when ")" follows
+// the parameters.
+//
+// Otherwise, this is only accepted as a multipart body if the string isn't a
+// top-level media type, the parameters include a boundary and nothing follows
+// body-fld-loc. A single part missing its subtype fails these, so it is an
+// error.
+func readEmptyMpartOrFldDsp(dec *imapwire.Decoder, value string, allowDsp bool, options *Options) (imap.BodyStructure, *imap.BodyStructureDisposition, error) {
+	params, isList, err := readBodyFldParamList(dec, options)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if !isList {
+		// A NIL body-fld-param can only belong to a body-fld-dsp
+		if !dec.Expect(allowDsp, "string") || !dec.ExpectNIL() {
+			return nil, nil, fmt.Errorf("in body-type-1part: %w", dec.Err())
+		} else if !dec.Special(')') {
+			return nil, nil, errMissingSubtype
+		}
+		return nil, &imap.BodyStructureDisposition{Value: value}, nil
+	}
+
+	if allowDsp && dec.Special(')') {
+		return nil, &imap.BodyStructureDisposition{Value: value, Params: params}, nil
+	}
+
+	if !isEmptyMpart(value, params) {
+		return nil, nil, errMissingSubtype
+	}
+	ext, err := readBodyExtMpartAfterParam(dec, params, options)
+	if err != nil {
+		return nil, nil, fmt.Errorf("in body-type-mpart: in body-ext-mpart: %w", err)
+	}
+	if !dec.ExpectSpecial(')') {
+		return nil, nil, fmt.Errorf("in body-type-mpart: %w", dec.Err())
+	}
+
+	return &imap.BodyStructureMultiPart{Subtype: value, Extended: ext}, nil, nil
+}
+
+var errMissingSubtype = errors.New("in body-type-1part: missing media subtype")
+
+// isEmptyMpart reports whether subtype and params can belong to a multipart
+// body with no children. A multipart body always has a boundary parameter, and
+// its subtype is never a top-level media type.
+func isEmptyMpart(subtype string, params map[string]string) bool {
+	switch strings.ToLower(subtype) {
+	case "application", "audio", "example", "font", "haptics", "image", "message", "model", "multipart", "text", "video":
+		return false
+	}
+	return params["boundary"] != ""
 }
 
 func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, options *Options) (*imap.BodyStructureSinglePart, error) {
@@ -1070,8 +1112,8 @@ func readBodyType1part(dec *imapwire.Decoder, typ, subtype string, depth int, op
 // or message/global part, then body-ext-1part. Servers don't always send the
 // first three: IMAP4rev1 has none for message/global, and some servers omit
 // them or send NIL for the envelope of message/rfc822. A NIL is then either
-// the envelope or body-fld-md5, and the body or body-fld-dsp after it tells
-// which. See:
+// the envelope or body-fld-md5, and the body or body-fld-dsp after it, and
+// whether a line count follows, tells which. See:
 // https://github.com/emersion/go-imap/issues/678
 func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.BodyStructureMessageRFC822, *imap.BodyStructureSinglePartExt, error) {
 	var (
@@ -1097,11 +1139,31 @@ func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.
 		msg.BodyStructure, dsp, err = readBodyOrFldDsp(dec, true, depth+1, options)
 		if err != nil {
 			return nil, nil, err
-		} else if msg.BodyStructure == nil {
+		}
+
+		hasSP := dec.SP()
+		if msg.BodyStructure != nil {
+			if !dec.Expect(hasSP, "SP") || !dec.ExpectNumber64(&msg.NumLines) {
+				return nil, nil, dec.Err()
+			}
+		} else if dsp != nil && hasSP && dec.Number64(&msg.NumLines) {
+			// ("string" body-fld-param) is either a body-fld-dsp or a
+			// multipart body with no children. A line count after it means
+			// the latter, since body-fld-lang is never a number.
+			if !isEmptyMpart(dsp.Value, dsp.Params) {
+				return nil, nil, errMissingSubtype
+			}
+			msg.BodyStructure = &imap.BodyStructureMultiPart{
+				Subtype:  dsp.Value,
+				Extended: &imap.BodyStructureMultiPartExt{Params: dsp.Params},
+			}
+		} else {
 			ext := imap.BodyStructureSinglePartExt{Disposition: dsp}
-			ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
-			if err != nil {
-				return nil, nil, fmt.Errorf("in body-ext-1part: %w", err)
+			if hasSP {
+				ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
+				if err != nil {
+					return nil, nil, fmt.Errorf("in body-ext-1part: %w", err)
+				}
 			}
 			return nil, &ext, nil
 		}
@@ -1119,10 +1181,10 @@ func readBodyTypeMsg(dec *imapwire.Decoder, depth int, options *Options) (*imap.
 		if err != nil {
 			return nil, nil, err
 		}
-	}
 
-	if !dec.ExpectSP() || !dec.ExpectNumber64(&msg.NumLines) {
-		return nil, nil, dec.Err()
+		if !dec.ExpectSP() || !dec.ExpectNumber64(&msg.NumLines) {
+			return nil, nil, dec.Err()
+		}
 	}
 
 	var ext *imap.BodyStructureSinglePartExt
@@ -1157,9 +1219,11 @@ func readBodyExt1partAfterMD5(dec *imapwire.Decoder, options *Options) (*imap.Bo
 		return nil, fmt.Errorf("in body-fld-dsp: %w", err)
 	}
 
-	ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
-	if err != nil {
-		return nil, err
+	if dec.SP() {
+		ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &ext, nil
@@ -1212,21 +1276,19 @@ func readBodyExtMpartAfterParam(dec *imapwire.Decoder, params map[string]string,
 		return nil, fmt.Errorf("in body-fld-dsp: %w", err)
 	}
 
-	ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
-	if err != nil {
-		return nil, err
+	if dec.SP() {
+		ext.Language, ext.Location, err = readBodyExtLangLoc(dec)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &ext, nil
 }
 
-// readBodyExtLangLoc reads the optional body-fld-lang and body-fld-loc at the
-// end of body-ext-1part and body-ext-mpart.
+// readBodyExtLangLoc reads body-fld-lang and the optional body-fld-loc at the
+// end of body-ext-1part and body-ext-mpart, after the SP that precedes them.
 func readBodyExtLangLoc(dec *imapwire.Decoder) (lang []string, loc string, err error) {
-	if !dec.SP() {
-		return nil, "", nil
-	}
-
 	lang, err = readBodyFldLang(dec)
 	if err != nil {
 		return nil, "", fmt.Errorf("in body-fld-lang: %w", err)

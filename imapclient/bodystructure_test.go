@@ -199,14 +199,32 @@ var bodyStructureTests = []struct {
 		},
 	},
 	{
-		name: "multipart with no children and no extension data",
-		data: `(("ALTERNATIVE")("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1) "MIXED")`,
+		name: "multipart with no children, body-fld-param only",
+		data: `(("ALTERNATIVE" ("BOUNDARY" "x"))("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1) "MIXED")`,
 		want: &imap.BodyStructureMultiPart{
 			Children: []imap.BodyStructure{
-				&imap.BodyStructureMultiPart{Subtype: "ALTERNATIVE"},
+				&imap.BodyStructureMultiPart{
+					Subtype: "ALTERNATIVE",
+					Extended: &imap.BodyStructureMultiPartExt{
+						Params: map[string]string{"boundary": "x"},
+					},
+				},
 				testBodyInnerPart,
 			},
 			Subtype: "MIXED",
+		},
+	},
+	{
+		name: "multipart with no children, full body-ext-mpart",
+		data: `("ALTERNATIVE" ("BOUNDARY" "x") ("INLINE" NIL) ("EN") "loc")`,
+		want: &imap.BodyStructureMultiPart{
+			Subtype: "ALTERNATIVE",
+			Extended: &imap.BodyStructureMultiPartExt{
+				Params:      map[string]string{"boundary": "x"},
+				Disposition: &imap.BodyStructureDisposition{Value: "INLINE"},
+				Language:    []string{"EN"},
+				Location:    "loc",
+			},
 		},
 	},
 	{
@@ -292,16 +310,43 @@ var bodyStructureTests = []struct {
 		},
 	},
 	{
-		name: "message/rfc822, NIL envelope, multipart body with no children and no extension data",
-		data: `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL ("ALTERNATIVE") 4)`,
+		// ("ALTERNATIVE" ("BOUNDARY" "x")) could also be a body-fld-dsp, but
+		// body-fld-lang can't be a number
+		name: "message/rfc822, NIL envelope, multipart body with no children, body-fld-param only",
+		data: `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL ("ALTERNATIVE" ("BOUNDARY" "x")) 4 NIL ("INLINE" NIL) NIL NIL)`,
 		want: &imap.BodyStructureSinglePart{
 			Type:     "MESSAGE",
 			Subtype:  "RFC822",
 			Encoding: "7BIT",
 			Size:     120,
 			MessageRFC822: &imap.BodyStructureMessageRFC822{
-				BodyStructure: &imap.BodyStructureMultiPart{Subtype: "ALTERNATIVE"},
-				NumLines:      4,
+				BodyStructure: &imap.BodyStructureMultiPart{
+					Subtype: "ALTERNATIVE",
+					Extended: &imap.BodyStructureMultiPartExt{
+						Params: map[string]string{"boundary": "x"},
+					},
+				},
+				NumLines: 4,
+			},
+			Extended: &imap.BodyStructureSinglePartExt{
+				Disposition: &imap.BodyStructureDisposition{Value: "INLINE"},
+			},
+		},
+	},
+	{
+		name: "message/global, IMAP4rev1 form, disposition with boundary parameter",
+		data: `("MESSAGE" "GLOBAL" NIL NIL NIL "7BIT" 120 NIL ("ATTACHMENT" ("BOUNDARY" "x")) "EN")`,
+		want: &imap.BodyStructureSinglePart{
+			Type:     "MESSAGE",
+			Subtype:  "GLOBAL",
+			Encoding: "7BIT",
+			Size:     120,
+			Extended: &imap.BodyStructureSinglePartExt{
+				Disposition: &imap.BodyStructureDisposition{
+					Value:  "ATTACHMENT",
+					Params: map[string]string{"boundary": "x"},
+				},
+				Language: []string{"EN"},
 			},
 		},
 	},
@@ -415,31 +460,113 @@ func TestReadBody(t *testing.T) {
 }
 
 func TestReadBody_invalid(t *testing.T) {
+	const (
+		msgNILEnvelope = `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 NIL `
+		textPart       = `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1)`
+		missingSubtype = `in body-type-1part: missing media subtype`
+	)
 	tests := []struct {
-		name    string
-		data    string
+		name string
+		data string
+		// wantErr is a prefix of the error: the decoder only appends
+		// ", got ..." when bytes are buffered
 		wantErr string
 	}{
 		{
 			name:    "NIL subtype",
 			data:    `("APPLICATION" NIL NIL NIL NIL "BASE64" 100 NIL ("ATTACHMENT" ("FILENAME" "x")) NIL NIL)`,
-			wantErr: `in body-type-1part: imapwire: expected string, got "N"`,
+			wantErr: `in body-type-1part: imapwire: expected string`,
 		},
 		{
 			name:    "atom subtype",
 			data:    `("TEXT" PLAIN NIL NIL NIL "7BIT" 10 1)`,
-			wantErr: `in body-type-1part: imapwire: expected string, got "P"`,
+			wantErr: `in body-type-1part: imapwire: expected string`,
 		},
 		{
 			name:    "message/rfc822, atom instead of envelope",
 			data:    `("MESSAGE" "RFC822" NIL NIL NIL "7BIT" 120 FOO ("TEXT" "PLAIN" NIL NIL NIL "7BIT" 10 1) 4)`,
-			wantErr: `in body-type-1part: imapwire: expected NIL, got " "`,
+			wantErr: `in body-type-1part: imapwire: expected NIL`,
+		},
+		{
+			name:    "missing subtype",
+			data:    `("TEXT" ("CHARSET" "UTF-8") NIL NIL "7BIT" 10 1)`,
+			wantErr: missingSubtype,
+		},
+		{
+			name:    "missing subtype, in multipart",
+			data:    `(("TEXT" ("CHARSET" "UTF-8") NIL NIL "7BIT" 10 1)` + textPart + ` "MIXED")`,
+			wantErr: `in body-type-mpart: ` + missingSubtype,
+		},
+		{
+			name:    "missing subtype, NIL envelope",
+			data:    msgNILEnvelope + `("TEXT" ("CHARSET" "UTF-8") NIL NIL "7BIT" 10 1) 4)`,
+			wantErr: `in body-type-1part: ` + missingSubtype,
+		},
+		{
+			name:    "missing subtype and parameters",
+			data:    `("TEXT")`,
+			wantErr: `in body-type-1part: imapwire: expected SP`,
+		},
+		{
+			name:    "missing subtype and parameters, NIL envelope",
+			data:    msgNILEnvelope + `("ALTERNATIVE") 4)`,
+			wantErr: `in body-type-1part: in body-type-1part: imapwire: expected SP`,
+		},
+		{
+			name:    "NIL subtype, NIL envelope",
+			data:    msgNILEnvelope + `("APPLICATION" NIL NIL NIL "BASE64" 100 NIL NIL NIL NIL) 4)`,
+			wantErr: `in body-type-1part: ` + missingSubtype,
+		},
+		{
+			name:    "multipart with no children, NIL body-fld-param",
+			data:    `("ALTERNATIVE" NIL NIL NIL)`,
+			wantErr: `in body-type-1part: imapwire: expected string`,
+		},
+		{
+			name:    "multipart with no children, NIL body-fld-param, NIL envelope",
+			data:    msgNILEnvelope + `("ALTERNATIVE" NIL) 4)`,
+			wantErr: `in body-type-1part: ` + missingSubtype,
+		},
+		{
+			name:    "multipart with no children, no boundary",
+			data:    `("ALTERNATIVE" ("CHARSET" "UTF-8") NIL NIL)`,
+			wantErr: missingSubtype,
+		},
+		{
+			name:    "multipart with no children, no boundary, NIL envelope",
+			data:    msgNILEnvelope + `("ALTERNATIVE" ("CHARSET" "UTF-8")) 4)`,
+			wantErr: `in body-type-1part: ` + missingSubtype,
+		},
+		{
+			name:    "multipart with no children, top-level media type as subtype",
+			data:    `("TEXT" ("BOUNDARY" "x"))`,
+			wantErr: missingSubtype,
+		},
+		{
+			name:    "multipart with no children, top-level media type as subtype, NIL envelope",
+			data:    msgNILEnvelope + `("text" ("BOUNDARY" "x")) 4)`,
+			wantErr: `in body-type-1part: ` + missingSubtype,
+		},
+		{
+			name:    "multipart with no children, body-extension",
+			data:    `("ALTERNATIVE" ("BOUNDARY" "x") NIL NIL NIL 1)`,
+			wantErr: `in body-type-mpart: imapwire: expected ')'`,
+		},
+		{
+			name:    "multipart with no children, key without value",
+			data:    `(("ALTERNATIVE" ("BOUNDARY"))` + textPart + ` "MIXED")`,
+			wantErr: `in body-type-mpart: in body-fld-param: key without value`,
+		},
+		{
+			name:    "message/rfc822, NIL envelope and NIL body",
+			data:    msgNILEnvelope + `NIL 4)`,
+			wantErr: `in body-type-1part: in body-ext-1part: in body-fld-lang: imapwire: expected nstring`,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := readBody(newTestBodyDecoder(tc.data), &Options{})
-			if err == nil || err.Error() != tc.wantErr {
+			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
 				t.Errorf("readBody() = %v, want %v", err, tc.wantErr)
 			}
 		})
