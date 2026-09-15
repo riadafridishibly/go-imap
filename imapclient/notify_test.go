@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riadafridishibly/go-imap/v2"
-	"github.com/riadafridishibly/go-imap/v2/imapclient"
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 )
 
 func TestClient_Notify(t *testing.T) {

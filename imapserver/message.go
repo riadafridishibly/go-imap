@@ -10,7 +10,7 @@ import (
 	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-message/textproto"
 
-	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/emersion/go-imap/v2"
 )
 
 // ExtractBodySection extracts a section of a message body.

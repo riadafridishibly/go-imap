@@ -3,7 +3,7 @@ package imapclient_test
 import (
 	"testing"
 
-	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/emersion/go-imap/v2"
 )
 
 func testCreate(t *testing.T, name string, utf8Accept bool) {

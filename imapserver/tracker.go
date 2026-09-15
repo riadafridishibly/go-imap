@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/emersion/go-imap/v2"
 )
 
 // MailboxTracker tracks the state of a mailbox.

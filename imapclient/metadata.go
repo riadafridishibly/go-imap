@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
+	"github.com/emersion/go-imap/v2/internal/imapwire"
 )
 
 type GetMetadataDepth int

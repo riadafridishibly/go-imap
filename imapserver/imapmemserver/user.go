@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/riadafridishibly/go-imap/v2"
-	"github.com/riadafridishibly/go-imap/v2/imapserver"
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapserver"
 )
 
 const mailboxDelim rune = '/'

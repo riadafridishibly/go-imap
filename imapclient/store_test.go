@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/emersion/go-imap/v2"
 )
 
 func TestStore(t *testing.T) {

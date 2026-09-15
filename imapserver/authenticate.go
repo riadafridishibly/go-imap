@@ -6,9 +6,9 @@ import (
 
 	"github.com/emersion/go-sasl"
 
-	"github.com/riadafridishibly/go-imap/v2"
-	"github.com/riadafridishibly/go-imap/v2/internal"
-	"github.com/riadafridishibly/go-imap/v2/internal/imapwire"
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/internal"
+	"github.com/emersion/go-imap/v2/internal/imapwire"
 )
 
 func (c *Conn) handleAuthenticate(tag string, dec *imapwire.Decoder) error {

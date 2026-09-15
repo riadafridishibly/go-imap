@@ -3,7 +3,7 @@ package imapclient
 import (
 	"fmt"
 
-	"github.com/riadafridishibly/go-imap/v2"
+	"github.com/emersion/go-imap/v2"
 )
 
 // Enable sends an ENABLE command.
