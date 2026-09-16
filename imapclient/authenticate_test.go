@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -33,13 +35,10 @@ func TestClient_Authenticate(t *testing.T) {
 
 // newScriptedServerClient returns a client connected to a server that sends a
 // greeting with caps, reads the first command and calls serve with its tag.
-// The server's connection has a 2 s deadline, so a client that waits without
-// writing fails the test instead of hanging it.
 func newScriptedServerClient(caps string, serve func(w io.Writer, br *bufio.Reader, tag string)) *imapclient.Client {
 	clientConn, serverConn := net.Pipe()
 	go func() {
 		defer serverConn.Close()
-		serverConn.SetDeadline(time.Now().Add(2 * time.Second))
 		io.WriteString(serverConn, "* OK [CAPABILITY "+caps+"] ready\r\n")
 		br := bufio.NewReader(serverConn)
 		line, _ := br.ReadString('\n')
@@ -105,111 +104,146 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cancelLine := make(chan string, 1)
-			client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
-				io.WriteString(w, tc.challenge+"\r\n")
-				line, _ := br.ReadString('\n')
-				cancelLine <- line
-				if line != "*\r\n" || tc.reply == "" {
+			synctest.Test(t, func(t *testing.T) {
+				cancelLine := make(chan string, 1)
+				client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+					io.WriteString(w, tc.challenge+"\r\n")
+					line, _ := br.ReadString('\n')
+					cancelLine <- line
+					if line != "*\r\n" || tc.reply == "" {
+						return
+					}
+					io.WriteString(w, strings.Replace(tc.reply, "TAG", tag, 1)+"\r\n")
+					line, _ = br.ReadString('\n')
+					tag, _, _ = strings.Cut(line, " ")
+					io.WriteString(w, tag+" OK done\r\n")
+				})
+				defer client.Close()
+
+				err := client.Authenticate(tc.sasl)
+				state := client.State() // before the server closes the connection
+				// Without the cancellation, the server reads NOOP in its place and
+				// closes the connection
+				noopErr := client.Noop().Wait()
+				if line := <-cancelLine; line != "*\r\n" {
+					t.Fatalf("sent %q after the challenge, want %q", line, "*\r\n")
+				}
+				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+					t.Errorf("Authenticate() = %v, want prefix %q", err, tc.wantErr)
+				}
+				if tc.reply != gmailNO {
+					// The server didn't end the exchange as expected, so the
+					// connection can't be trusted
+					if state != imap.ConnStateLogout {
+						t.Errorf("State() = %v, want %v", state, imap.ConnStateLogout)
+					}
+					if noopErr == nil {
+						t.Errorf("Noop() = nil, want an error on the closed connection")
+					}
 					return
 				}
-				io.WriteString(w, strings.Replace(tc.reply, "TAG", tag, 1)+"\r\n")
-				line, _ = br.ReadString('\n')
-				tag, _, _ = strings.Cut(line, " ")
-				io.WriteString(w, tag+" OK done\r\n")
+				var imapErr *imap.Error
+				if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
+					t.Errorf("Authenticate() = %v, want the server's NO attached", err)
+				}
+				if state != imap.ConnStateNotAuthenticated {
+					t.Errorf("State() = %v, want %v", state, imap.ConnStateNotAuthenticated)
+				}
+				if noopErr != nil {
+					t.Errorf("Noop() = %v", noopErr)
+				}
 			})
-			defer client.Close()
-
-			err := client.Authenticate(tc.sasl)
-			state := client.State() // before the server closes the connection
-			// Without the cancellation, the server reads NOOP in its place and
-			// closes the connection
-			noopErr := client.Noop().Wait()
-			if line := <-cancelLine; line != "*\r\n" {
-				t.Fatalf("sent %q after the challenge, want %q", line, "*\r\n")
-			}
-			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
-				t.Errorf("Authenticate() = %v, want prefix %q", err, tc.wantErr)
-			}
-			if tc.reply != gmailNO {
-				// The server didn't end the exchange as expected, so the
-				// connection can't be trusted
-				if state != imap.ConnStateLogout {
-					t.Errorf("State() = %v, want %v", state, imap.ConnStateLogout)
-				}
-				if noopErr == nil {
-					t.Errorf("Noop() = nil, want an error on the closed connection")
-				}
-				return
-			}
-			var imapErr *imap.Error
-			if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
-				t.Errorf("Authenticate() = %v, want the server's NO attached", err)
-			}
-			if state != imap.ConnStateNotAuthenticated {
-				t.Errorf("State() = %v, want %v", state, imap.ConnStateNotAuthenticated)
-			}
-			if noopErr != nil {
-				t.Errorf("Noop() = %v", noopErr)
-			}
 		})
 	}
 }
 
-// slowClient is a SASL mechanism whose Next takes a while.
+// slowClient is a SASL mechanism whose Next takes longer than the client's
+// 30 s write timeout.
 type slowClient struct{}
 
 func (slowClient) Start() (string, []byte, error) { return "X-TEST", []byte("ir"), nil }
 func (slowClient) Next([]byte) ([]byte, error) {
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(31 * time.Second)
 	return []byte("resp"), nil
 }
 
 // The server ends AUTHENTICATE right after a challenge, before the client has
 // answered it. The client then waits for a challenge on a finished command.
 func TestClient_Authenticate_completedDuringNext(t *testing.T) {
-	client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
-		io.WriteString(w, "+ Zm9v\r\n"+tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
-		io.Copy(io.Discard, br)
-	})
-	defer client.Close()
+	synctest.Test(t, func(t *testing.T) {
+		client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+			io.WriteString(w, "+ Zm9v\r\n"+tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
+			io.Copy(io.Discard, br)
+		})
+		defer client.Close()
 
-	done := make(chan error, 1)
-	go func() { done <- client.Authenticate(slowClient{}) }()
-	select {
-	case err := <-done:
+		err := client.Authenticate(slowClient{})
 		var imapErr *imap.Error
 		if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
 			t.Errorf("Authenticate() = %v, want the server's NO", err)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Authenticate() blocked")
-	}
+	})
+}
+
+// The answer to a challenge is sent after Next, which outlasts the write
+// deadline set when the command started.
+func TestClient_Authenticate_slowNext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+			io.WriteString(w, "+ Zm9v\r\n")
+			br.ReadString('\n')
+			io.WriteString(w, tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
+		})
+		defer client.Close()
+
+		err := client.Authenticate(slowClient{})
+		var imapErr *imap.Error
+		if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
+			t.Errorf("Authenticate() = %v, want the server's NO", err)
+		}
+	})
+}
+
+// The server stops reading, so the answer to a challenge times out. The server
+// is left inside the exchange, so the client must be closed.
+func TestClient_Authenticate_serverStopsReading(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stop := make(chan struct{})
+		defer close(stop)
+		client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+			io.WriteString(w, "+ Zm9v\r\n")
+			<-stop
+		})
+		defer client.Close()
+
+		err := client.Authenticate(fuzzSASLClient{mode: 2})
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("Authenticate() = %v, want a write timeout", err)
+		}
+		if state := client.State(); state != imap.ConnStateLogout {
+			t.Errorf("State() = %v, want %v", state, imap.ConnStateLogout)
+		}
+	})
 }
 
 // The library has no timeout for a silent server. The caller bounds
 // Authenticate by closing the client.
 func TestClient_Authenticate_callerTimeout(t *testing.T) {
-	client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
-		io.WriteString(w, "+ Zm9v\r\n")
-		io.Copy(io.Discard, br) // never answers the "*"
-	})
-	defer client.Close()
+	synctest.Test(t, func(t *testing.T) {
+		client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+			io.WriteString(w, "+ Zm9v\r\n")
+			io.Copy(io.Discard, br) // never answers the "*"
+		})
+		defer client.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	context.AfterFunc(ctx, func() { client.Close() })
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		context.AfterFunc(ctx, func() { client.Close() })
 
-	done := make(chan error, 1)
-	go func() { done <- client.Authenticate(fuzzSASLClient{mode: 0}) }()
-	select {
-	case err := <-done:
-		if err == nil {
+		if err := client.Authenticate(fuzzSASLClient{mode: 0}); err == nil {
 			t.Errorf("Authenticate() = nil, want an error")
 		}
-	case <-time.After(time.Second): // before the server's 2 s deadline closes the connection
-		t.Fatal("Authenticate() blocked after the client was closed")
-	}
+	})
 }
 
 // fuzzSASLClient is a SASL mechanism whose behavior is picked by mode%4.
@@ -235,6 +269,10 @@ func (c fuzzSASLClient) Next([]byte) ([]byte, error) {
 
 // FuzzAuthenticate checks that Authenticate, then NOOP and Close, return
 // whatever the server sends before it closes the connection.
+//
+// Unlike the tests above, it runs on the real clock. A goroutine spinning in a
+// loop, like the one fixed in #39, stops synctest's fake clock, so a timeout
+// would never fire.
 //
 // mode%4 picks the mechanism's behavior, and mode&4 turns off SASL-IR. In the
 // script, lines are separated by "\n" and TAG is the AUTHENTICATE tag.
