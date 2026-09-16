@@ -13,16 +13,20 @@ import (
 )
 
 // newRawServerClient returns a client connected to a server that answers the
-// first command with resp followed by a tagged OK.
-func newRawServerClient(t *testing.T, resp string) *imapclient.Client {
+// first command with resp followed by a tagged OK. The command, without its
+// tag, is sent on the returned channel.
+func newRawServerClient(t *testing.T, resp string) (*imapclient.Client, <-chan string) {
 	clientConn, serverConn := net.Pipe()
+	cmds := make(chan string, 1)
 	go func() {
+		defer close(cmds)
 		io.WriteString(serverConn, "* OK ready\r\n")
 		line, err := bufio.NewReader(serverConn).ReadString('\n')
 		if err != nil {
 			return
 		}
-		tag, _, _ := strings.Cut(line, " ")
+		tag, cmd, _ := strings.Cut(strings.TrimSuffix(line, "\r\n"), " ")
+		cmds <- cmd
 		io.WriteString(serverConn, resp+"\r\n"+tag+" OK done\r\n")
 	}()
 	client := imapclient.New(clientConn, nil)
@@ -30,7 +34,7 @@ func newRawServerClient(t *testing.T, resp string) *imapclient.Client {
 		client.Close()
 		serverConn.Close()
 	})
-	return client
+	return client, cmds
 }
 
 func TestFetch_gmailIDs(t *testing.T) {
@@ -67,14 +71,17 @@ func TestFetch_gmailIDs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			client := newRawServerClient(t, tc.resp)
+			client, cmds := newRawServerClient(t, tc.resp)
 			msgs, err := client.Fetch(imap.UIDSetNum(2), &imap.FetchOptions{
 				GmailMsgID:    true,
 				GmailThreadID: true,
 			}).Collect()
+			if cmd, want := <-cmds, "UID FETCH 2 (UID X-GM-MSGID X-GM-THRID)"; cmd != want {
+				t.Errorf("sent %q, want %q", cmd, want)
+			}
 			if tc.want == nil {
-				if err == nil {
-					t.Fatalf("Collect() = %v, want an error", msgs)
+				if err == nil || !strings.Contains(err.Error(), "uint64") {
+					t.Fatalf("Collect() = %v, %v; want a uint64 error", msgs, err)
 				}
 				return
 			}

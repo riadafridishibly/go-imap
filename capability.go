@@ -55,7 +55,6 @@ const (
 	CapMultiSearch      Cap = "MULTISEARCH"        // RFC 7377
 	CapNotify           Cap = "NOTIFY"             // RFC 5465
 	CapObjectID         Cap = "OBJECTID"           // RFC 8474
-	CapXGmExt1          Cap = "X-GM-EXT-1"         // Gmail
 	CapPreview          Cap = "PREVIEW"            // RFC 8970
 	CapQResync          Cap = "QRESYNC"            // RFC 7162
 	CapQuota            Cap = "QUOTA"              // RFC 9208
@@ -75,6 +74,11 @@ const (
 	CapUIDOnly          Cap = "UIDONLY"            // RFC 9586
 	CapListMetadata     Cap = "LIST-METADATA"      // RFC 9590
 	CapInProgress       Cap = "INPROGRESS"         // RFC 9585
+)
+
+// Vendor capabilities, not in the IANA registry.
+const (
+	CapXGmExt1 Cap = "X-GM-EXT-1" // Gmail
 )
 
 var imap4rev2Caps = CapSet{
