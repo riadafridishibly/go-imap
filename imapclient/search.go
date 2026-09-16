@@ -255,6 +255,11 @@ func writeSearchKey(enc *imapwire.Encoder, criteria *imap.SearchCriteria) {
 	for _, id := range criteria.GmailThreadID {
 		encodeItem().Atom("X-GM-THRID").SP().Uint64(id)
 	}
+	for _, label := range criteria.GmailLabels {
+		// Gmail takes the decoded name here, not modified UTF-7, and rejects
+		// an unquoted system label
+		encodeItem().Atom("X-GM-LABELS").SP().String(label)
+	}
 
 	for _, not := range criteria.Not {
 		encodeItem().Atom("NOT").SP()
@@ -384,6 +389,11 @@ func searchCriteriaIsASCII(criteria *imap.SearchCriteria) bool {
 		}
 	}
 	for _, s := range criteria.Text {
+		if !isASCII(s) {
+			return false
+		}
+	}
+	for _, s := range criteria.GmailLabels {
 		if !isASCII(s) {
 			return false
 		}
