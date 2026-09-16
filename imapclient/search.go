@@ -36,20 +36,6 @@ func returnSearchOptions(options *imap.SearchOptions) []string {
 }
 
 func (c *Client) search(numKind imapwire.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) *SearchCommand {
-	// The IMAP4rev2 SEARCH charset defaults to UTF-8. When UTF8=ACCEPT is
-	// enabled, specifying any CHARSET is invalid. For IMAP4rev1 the default is
-	// undefined and only US-ASCII support is required. What's more, some
-	// servers completely reject the CHARSET keyword. So, let's check if we
-	// actually have UTF-8 strings in the search criteria before using that.
-	// TODO: there might be a benefit in specifying CHARSET UTF-8 for IMAP4rev1
-	// servers even if we only send ASCII characters: the server then must
-	// decode encoded headers and Content-Transfer-Encoding before matching the
-	// criteria.
-	var charset string
-	if !c.Caps().Has(imap.CapIMAP4rev2) && !c.enabled.Has(imap.CapUTF8Accept) && !searchCriteriaIsASCII(criteria) {
-		charset = "UTF-8"
-	}
-
 	var all imap.NumSet
 	switch numKind {
 	case imapwire.NumKindSeq:
@@ -67,8 +53,17 @@ func (c *Client) search(numKind imapwire.NumKind, criteria *imap.SearchCriteria,
 		})
 	}
 	enc.SP()
-	if charset != "" {
-		enc.Atom("CHARSET").SP().Atom(charset).SP()
+	// The IMAP4rev2 SEARCH charset defaults to UTF-8. When UTF8=ACCEPT is
+	// enabled, specifying any CHARSET is invalid. For IMAP4rev1 the default is
+	// undefined and only US-ASCII support is required. What's more, some
+	// servers completely reject the CHARSET keyword. So, let's check if we
+	// actually have UTF-8 strings in the search criteria before using that.
+	// TODO: there might be a benefit in specifying CHARSET UTF-8 for IMAP4rev1
+	// servers even if we only send ASCII characters: the server then must
+	// decode encoded headers and Content-Transfer-Encoding before matching the
+	// criteria.
+	if !enc.QuotedUTF8 && !searchCriteriaIsASCII(criteria) {
+		enc.Atom("CHARSET").SP().Atom("UTF-8").SP()
 	}
 	writeSearchKey(enc.Encoder, criteria)
 	enc.end()

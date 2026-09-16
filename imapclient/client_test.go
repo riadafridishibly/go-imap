@@ -5,6 +5,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -279,5 +281,72 @@ func TestWaitGreeting_eof(t *testing.T) {
 
 	if err := client.WaitGreeting(); err == nil {
 		t.Fatalf("WaitGreeting() should fail")
+	}
+}
+
+func TestUTF8Mode(t *testing.T) {
+	tests := []struct {
+		name   string
+		caps   string
+		enable imap.Cap // enabled before the other commands, if set
+		utf8   bool
+	}{
+		{name: "IMAP4rev1 and IMAP4rev2", caps: "IMAP4rev1 IMAP4rev2"},
+		{name: "ENABLE IMAP4rev2", caps: "IMAP4rev1 IMAP4rev2", enable: imap.CapIMAP4rev2, utf8: true},
+		{name: "ENABLE UTF8=ACCEPT", caps: "IMAP4rev1 UTF8=ACCEPT", enable: imap.CapUTF8Accept, utf8: true},
+		{name: "IMAP4rev2 only", caps: "IMAP4rev2", utf8: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// In UTF-8 mode, a label is kept as sent
+			wantCreate, wantLabel := `CREATE "&ANw-bung"`, "Übung"
+			if tc.utf8 {
+				wantCreate, wantLabel = `CREATE "Übung"`, "&ANw-bung"
+			}
+			resps := []string{"", "* 1 FETCH (X-GM-LABELS (&ANw-bung) UID 1)", ""}
+			if tc.enable != "" {
+				resps = append([]string{"* ENABLED " + string(tc.enable)}, resps...)
+			}
+			client, cmds := newRawServerClientCaps(t, tc.caps, resps...)
+			// Commands sent before the greeting see no capabilities (#6)
+			if err := client.WaitGreeting(); err != nil {
+				t.Fatalf("WaitGreeting() = %v", err)
+			}
+			if tc.enable != "" {
+				if _, err := client.Enable(tc.enable).Wait(); err != nil {
+					t.Fatalf("Enable() = %v", err)
+				}
+				<-cmds
+			}
+
+			if err := client.Create("Übung", nil).Wait(); err != nil {
+				t.Fatalf("Create() = %v", err)
+			}
+			if cmd := <-cmds; cmd != wantCreate {
+				t.Errorf("sent %q, want %q", cmd, wantCreate)
+			}
+
+			msgs, err := client.Fetch(imap.UIDSetNum(1), &imap.FetchOptions{GmailLabels: true}).Collect()
+			<-cmds
+			if err != nil {
+				t.Fatalf("Fetch() = %v", err)
+			}
+			if len(msgs) != 1 {
+				t.Fatalf("Fetch() = %d messages, want 1", len(msgs))
+			}
+			if got := msgs[0].GmailLabels; !slices.Equal(got, []string{wantLabel}) {
+				t.Errorf("Fetch() labels = %q, want [%q]", got, wantLabel)
+			}
+
+			// Outside UTF-8 mode the criteria is a literal, and only the line
+			// before it reaches the channel
+			if _, err := client.Search(&imap.SearchCriteria{Body: []string{"Übung"}}, nil).Wait(); err != nil {
+				t.Fatalf("Search() = %v", err)
+			}
+			cmd := <-cmds
+			if got := strings.Contains(cmd, "CHARSET UTF-8"); got == tc.utf8 {
+				t.Errorf("sent %q, want CHARSET UTF-8: %v", cmd, !tc.utf8)
+			}
+		})
 	}
 }

@@ -871,9 +871,8 @@ func (c *Client) handleFetch(seqNum uint32) error {
 			if !dec.ExpectSP() {
 				return dec.Err()
 			}
-			// Same condition that sets QuotedUTF8 on the encoder
 			c.mutex.Lock()
-			utf8Mode := c.caps.Has(imap.CapIMAP4rev2) || c.enabled.Has(imap.CapUTF8Accept)
+			utf8Mode := c.utf8Mode()
 			c.mutex.Unlock()
 			labels, err := readGmailLabels(dec, utf8Mode)
 			if err != nil {
