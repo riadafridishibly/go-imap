@@ -12,6 +12,11 @@ import (
 // Authenticate sends an AUTHENTICATE command.
 //
 // Unlike other commands, this method blocks until the SASL exchange completes.
+//
+// If the exchange fails on the client side, for instance because the
+// mechanism's Next returns an error, it is cancelled. The returned error then
+// wraps both the mechanism's error and the server's response, so check it with
+// errors.Is or errors.As.
 func (c *Client) Authenticate(saslClient sasl.Client) error {
 	mech, initialResp, err := saslClient.Start()
 	if err != nil {
@@ -47,7 +52,7 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 			}
 
 			contReq = c.registerContReq(cmd)
-			if err := c.writeSASLResp(initialResp); err != nil {
+			if err := c.writeSASLLine(internal.EncodeSASL(initialResp)); err != nil {
 				return err
 			}
 			initialResp = nil
@@ -65,7 +70,7 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 		}
 
 		contReq = c.registerContReq(cmd)
-		if err := c.writeSASLResp(resp); err != nil {
+		if err := c.writeSASLLine(internal.EncodeSASL(resp)); err != nil {
 			return err
 		}
 	}
@@ -79,23 +84,28 @@ type authenticateCommand struct {
 // the server leaves it and the connection stays usable. It returns err, with
 // the server's response (usually NO or BAD) attached.
 func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
-	c.bw.WriteString("*\r\n")
-	cancelErr := c.bw.Flush() // also reports a WriteString error
+	cancelErr := c.writeSASLLine("*")
 	if cancelErr == nil {
 		cancelErr = cmd.wait()
 	}
-	if cancelErr != nil {
-		return fmt.Errorf("%w: %w", err, cancelErr)
-	}
-	return err
-}
-
-func (c *Client) writeSASLResp(resp []byte) error {
-	respStr := internal.EncodeSASL(resp)
-	if _, err := c.bw.WriteString(respStr + "\r\n"); err != nil {
+	if cancelErr == nil {
+		// The server completed an exchange the client gave up on, and the
+		// client state is now authenticated. Don't keep that connection.
+		c.closeWithError(err)
 		return err
 	}
-	if err := c.bw.Flush(); err != nil {
+	return fmt.Errorf("%w: %w", err, cancelErr)
+}
+
+// writeSASLLine writes a line of the SASL exchange. If that fails, the server
+// is left inside the exchange, so the connection is closed.
+func (c *Client) writeSASLLine(s string) error {
+	// The exchange can outlast the deadline set by beginCommand
+	c.setWriteTimeout(cmdWriteTimeout)
+	c.bw.WriteString(s)
+	c.bw.WriteString("\r\n")
+	if err := c.bw.Flush(); err != nil { // also reports WriteString errors
+		c.closeWithError(err)
 		return err
 	}
 	return nil

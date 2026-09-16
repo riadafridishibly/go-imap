@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-sasl"
 
@@ -37,17 +38,19 @@ func (noInitialResponseClient) Next([]byte) ([]byte, error)    { return nil, nil
 
 func TestClient_Authenticate_cancel(t *testing.T) {
 	oauth := sasl.NewOAuthBearerClient(&sasl.OAuthBearerOptions{Username: "user", Token: "bad"})
+	// Gmail's reply to a bad token
+	gmailChallenge := "+ eyJzdGF0dXMiOiJpbnZhbGlkX3JlcXVlc3QiLCJzY29wZSI6Imh0dHBzOi8vbWFpbC5nb29nbGUuY29tLyJ9"
 	tests := []struct {
 		name      string
 		sasl      sasl.Client
 		challenge string
-		wantErr   string // prefix, followed by the server's NO
+		accept    bool   // the server answers the cancellation with OK
+		wantErr   string // prefix, followed by the server's NO unless accept
 	}{
 		{
-			// Gmail's reply to a bad token
 			name:      "mechanism error",
 			sasl:      oauth,
-			challenge: "+ eyJzdGF0dXMiOiJpbnZhbGlkX3JlcXVlc3QiLCJzY29wZSI6Imh0dHBzOi8vbWFpbC5nb29nbGUuY29tLyJ9",
+			challenge: gmailChallenge,
 			wantErr:   "OAUTHBEARER authentication error (invalid_request): ",
 		},
 		{
@@ -62,6 +65,13 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 			challenge: "+ ",
 			wantErr:   "imapclient: server requested SASL initial response, but we don't have one: ",
 		},
+		{
+			name:      "cancellation accepted",
+			sasl:      oauth,
+			challenge: gmailChallenge,
+			accept:    true,
+			wantErr:   "OAUTHBEARER authentication error (invalid_request)",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,6 +79,8 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 			cancelLine := make(chan string, 1)
 			go func() {
 				defer serverConn.Close()
+				// Fail instead of hanging if the client waits without writing
+				serverConn.SetDeadline(time.Now().Add(5 * time.Second))
 				io.WriteString(serverConn, "* OK [CAPABILITY IMAP4rev1 SASL-IR] ready\r\n")
 				br := bufio.NewReader(serverConn)
 				line, _ := br.ReadString('\n')
@@ -79,7 +91,11 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 				if line != "*\r\n" {
 					return
 				}
-				io.WriteString(serverConn, tag+" NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)\r\n")
+				reply := " NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)"
+				if tc.accept {
+					reply = " OK done"
+				}
+				io.WriteString(serverConn, tag+reply+"\r\n")
 				line, _ = br.ReadString('\n')
 				tag, _, _ = strings.Cut(line, " ")
 				io.WriteString(serverConn, tag+" OK done\r\n")
@@ -88,16 +104,33 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 			defer client.Close()
 
 			err := client.Authenticate(tc.sasl)
+			state := client.State() // before the server closes the connection
 			// Without the cancellation, the server reads NOOP in its place and
 			// closes the connection
 			noopErr := client.Noop().Wait()
 			if line := <-cancelLine; line != "*\r\n" {
 				t.Fatalf("sent %q after the challenge, want %q", line, "*\r\n")
 			}
+			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+				t.Errorf("Authenticate() = %v, want prefix %q", err, tc.wantErr)
+			}
+			if tc.accept {
+				// The client gave up on the exchange, so it must not end up
+				// authenticated
+				if state != imap.ConnStateLogout {
+					t.Errorf("State() = %v, want %v", state, imap.ConnStateLogout)
+				}
+				if noopErr == nil {
+					t.Errorf("Noop() = nil, want an error on the closed connection")
+				}
+				return
+			}
 			var imapErr *imap.Error
-			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) ||
-				!errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
-				t.Errorf("Authenticate() = %v, want %q followed by the server's NO", err, tc.wantErr)
+			if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
+				t.Errorf("Authenticate() = %v, want the server's NO attached", err)
+			}
+			if state != imap.ConnStateNotAuthenticated {
+				t.Errorf("State() = %v, want %v", state, imap.ConnStateNotAuthenticated)
 			}
 			if noopErr != nil {
 				t.Errorf("Noop() = %v", noopErr)
