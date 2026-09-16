@@ -158,31 +158,54 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 }
 
 // slowClient is a SASL mechanism whose Next takes longer than the client's
-// 30 s write timeout.
-type slowClient struct{}
+// 30 s write timeout. Next then returns err, if set.
+type slowClient struct{ err error }
 
 func (slowClient) Start() (string, []byte, error) { return "X-TEST", []byte("ir"), nil }
-func (slowClient) Next([]byte) ([]byte, error) {
+func (c slowClient) Next([]byte) ([]byte, error) {
 	time.Sleep(31 * time.Second)
-	return []byte("resp"), nil
+	return []byte("resp"), c.err
 }
 
 // The server ends AUTHENTICATE right after a challenge, before the client has
-// answered it. The client then waits for a challenge on a finished command.
+// answered it. The client must not send the answer or the "*", which the server
+// would read as a new command.
 func TestClient_Authenticate_completedDuringNext(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
-			io.WriteString(w, "+ Zm9v\r\n"+tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
-			io.Copy(io.Discard, br)
-		})
-		defer client.Close()
+	tests := []struct {
+		name string
+		sasl sasl.Client
+	}{
+		{name: "answer", sasl: slowClient{}},
+		{name: "cancel", sasl: slowClient{err: errors.New("mechanism failed")}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				nextLine := make(chan string, 1)
+				client := newScriptedServerClient("IMAP4rev1 SASL-IR", func(w io.Writer, br *bufio.Reader, tag string) {
+					io.WriteString(w, "+ Zm9v\r\n"+tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
+					line, _ := br.ReadString('\n')
+					nextLine <- line
+					tag, _, _ = strings.Cut(line, " ")
+					io.WriteString(w, tag+" OK done\r\n")
+				})
+				defer client.Close()
 
-		err := client.Authenticate(slowClient{})
-		var imapErr *imap.Error
-		if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
-			t.Errorf("Authenticate() = %v, want the server's NO", err)
-		}
-	})
+				err := client.Authenticate(tc.sasl)
+				noopErr := client.Noop().Wait()
+				if line := <-nextLine; !strings.HasSuffix(line, " NOOP\r\n") {
+					t.Errorf("sent %q after the command ended, want NOOP", line)
+				}
+				var imapErr *imap.Error
+				if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
+					t.Errorf("Authenticate() = %v, want the server's NO", err)
+				}
+				if noopErr != nil {
+					t.Errorf("Noop() = %v", noopErr)
+				}
+			})
+		})
+	}
 }
 
 // The answer to a challenge is sent after Next, which outlasts the write

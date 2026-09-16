@@ -52,7 +52,7 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 			}
 
 			contReq = c.registerContReq(cmd)
-			if err := c.writeSASLLine(internal.EncodeSASL(initialResp)); err != nil {
+			if err := c.writeSASLLine(cmd, internal.EncodeSASL(initialResp)); err != nil {
 				return err
 			}
 			initialResp = nil
@@ -70,7 +70,7 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 		}
 
 		contReq = c.registerContReq(cmd)
-		if err := c.writeSASLLine(internal.EncodeSASL(resp)); err != nil {
+		if err := c.writeSASLLine(cmd, internal.EncodeSASL(resp)); err != nil {
 			return err
 		}
 	}
@@ -84,7 +84,7 @@ type authenticateCommand struct {
 // the server leaves it and the connection stays usable. It returns err, with
 // the server's response (usually NO or BAD) attached.
 func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
-	cancelErr := c.writeSASLLine("*")
+	cancelErr := c.writeSASLLine(cmd, "*")
 	if cancelErr == nil {
 		cancelErr = cmd.wait()
 	}
@@ -97,9 +97,18 @@ func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
 	return fmt.Errorf("%w: %w", err, cancelErr)
 }
 
-// writeSASLLine writes a line of the SASL exchange. If that fails, the server
-// is left inside the exchange, so the connection is closed.
-func (c *Client) writeSASLLine(s string) error {
+// writeSASLLine writes a line of the SASL exchange. If the server has already
+// ended the command, nothing is written, since the server would read the line
+// as a new command. If the write fails, the server is left inside the exchange,
+// so the connection is closed.
+func (c *Client) writeSASLLine(cmd *authenticateCommand, s string) error {
+	c.mutex.Lock()
+	completed := cmd.completed
+	c.mutex.Unlock()
+	if completed {
+		return nil
+	}
+
 	// The exchange can outlast the deadline set by beginCommand
 	c.setWriteTimeout(cmdWriteTimeout)
 	c.bw.WriteString(s)
