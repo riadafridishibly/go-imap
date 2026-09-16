@@ -60,12 +60,8 @@ type SearchCriteria struct {
 
 	ModSeq *SearchCriteriaModSeq // requires CONDSTORE
 
-	// Gmail ids, zero means absent. These require X-GM-EXT-1.
-	//
-	// And does not merge these fields: two different ids cannot match the
-	// same message, and one field cannot express that.
-	GmailMsgID    uint64
-	GmailThreadID uint64
+	GmailMsgID    []uint64 // requires X-GM-EXT-1
+	GmailThreadID []uint64 // requires X-GM-EXT-1
 }
 
 // And intersects two search criteria.
@@ -94,6 +90,9 @@ func (criteria *SearchCriteria) And(other *SearchCriteria) {
 
 	criteria.Not = append(criteria.Not, other.Not...)
 	criteria.Or = append(criteria.Or, other.Or...)
+
+	criteria.GmailMsgID = append(criteria.GmailMsgID, other.GmailMsgID...)
+	criteria.GmailThreadID = append(criteria.GmailThreadID, other.GmailThreadID...)
 }
 
 func intersectSince(t1, t2 time.Time) time.Time {

@@ -10,20 +10,31 @@ import (
 )
 
 func TestWriteSearchKey_gmail(t *testing.T) {
+	and := func(a, b imap.SearchCriteria) imap.SearchCriteria {
+		a.And(&b)
+		return a
+	}
 	tests := []struct {
 		criteria imap.SearchCriteria
 		want     string
 	}{
-		{imap.SearchCriteria{GmailMsgID: 1853070351386201256}, "X-GM-MSGID 1853070351386201256"},
-		{imap.SearchCriteria{GmailThreadID: 18446744073709551615}, "X-GM-THRID 18446744073709551615"},
+		{imap.SearchCriteria{GmailMsgID: []uint64{1853070351386201256}}, "X-GM-MSGID 1853070351386201256"},
+		{imap.SearchCriteria{GmailThreadID: []uint64{18446744073709551615}}, "X-GM-THRID 18446744073709551615"},
 		{
 			imap.SearchCriteria{
 				Flag:          []imap.Flag{imap.FlagSeen},
-				GmailMsgID:    1,
-				GmailThreadID: 2,
-				Not:           []imap.SearchCriteria{{GmailMsgID: 3}},
+				GmailMsgID:    []uint64{1},
+				GmailThreadID: []uint64{2},
+				Not:           []imap.SearchCriteria{{GmailMsgID: []uint64{3}}},
 			},
 			"SEEN X-GM-MSGID 1 X-GM-THRID 2 NOT (X-GM-MSGID 3)",
+		},
+		{
+			and(
+				imap.SearchCriteria{Flag: []imap.Flag{imap.FlagSeen}, GmailMsgID: []uint64{1}},
+				imap.SearchCriteria{GmailMsgID: []uint64{2}, GmailThreadID: []uint64{3}},
+			),
+			"SEEN X-GM-MSGID 1 X-GM-MSGID 2 X-GM-THRID 3",
 		},
 	}
 	for _, tc := range tests {
