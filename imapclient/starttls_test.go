@@ -8,7 +8,7 @@ import (
 )
 
 func TestStartTLS(t *testing.T) {
-	conn, server := newMemClientServerPair(t)
+	conn, server := newMemClientServerPair(t, nil)
 	defer conn.Close()
 	defer server.Close()
 

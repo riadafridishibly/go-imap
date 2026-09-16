@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 )
 
 func testCreate(t *testing.T, name string, utf8Accept bool) {
@@ -54,4 +55,28 @@ func TestCreate(t *testing.T) {
 	t.Run("ampersand_utf8", func(t *testing.T) {
 		testCreate(t, "Angus & Julia", true)
 	})
+}
+
+// A server without IMAP4rev1 is in UTF-8 mode without ENABLE
+func TestCreate_imap4rev2Only(t *testing.T) {
+	conn, server := newMemClientServerPair(t, imap.CapSet{imap.CapIMAP4rev2: {}})
+	defer server.Close()
+	client := imapclient.New(conn, nil)
+	defer client.Close()
+	if err := client.Login(testUsername, testPassword).Wait(); err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+
+	for _, name := range []string{"Angus & Julia", "Cafè"} {
+		if err := client.Create(name, nil).Wait(); err != nil {
+			t.Fatalf("Create(%q) = %v", name, err)
+		}
+		mailboxes, err := client.List("", name, nil).Collect()
+		if err != nil {
+			t.Fatalf("List(%q) = %v", name, err)
+		}
+		if len(mailboxes) != 1 || mailboxes[0].Mailbox != name {
+			t.Errorf("List(%q) = %d mailboxes, want exactly one with that name", name, len(mailboxes))
+		}
+	}
 }

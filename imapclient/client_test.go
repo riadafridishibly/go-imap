@@ -80,7 +80,10 @@ ZboOWVe3icTy64BT3OQhmg==
 -----END RSA PRIVATE KEY-----
 `
 
-func newMemClientServerPair(t *testing.T) (net.Conn, io.Closer) {
+func newMemClientServerPair(t *testing.T, caps imap.CapSet) (net.Conn, io.Closer) {
+	if caps == nil {
+		caps = imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapIMAP4rev2: {}}
+	}
 	memServer := imapmemserver.New()
 
 	user := imapmemserver.NewUser(testUsername, testPassword)
@@ -101,10 +104,7 @@ func newMemClientServerPair(t *testing.T) (net.Conn, io.Closer) {
 			Certificates: []tls.Certificate{cert},
 		},
 		InsecureAuth: true,
-		Caps: imap.CapSet{
-			imap.CapIMAP4rev1: {},
-			imap.CapIMAP4rev2: {},
-		},
+		Caps:         caps,
 	})
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -151,7 +151,7 @@ func newClientServerPairWithOptions(t *testing.T, initialState imap.ConnState, o
 		}
 		conn, server = newDovecotClientServerPair(t)
 	} else {
-		conn, server = newMemClientServerPair(t)
+		conn, server = newMemClientServerPair(t, nil)
 	}
 
 	var debugWriter swapWriter

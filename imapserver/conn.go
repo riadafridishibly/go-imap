@@ -496,8 +496,11 @@ type responseEncoder struct {
 }
 
 // utf8Mode reports whether strings and mailbox names are sent and received as
-// UTF-8.
+// UTF-8. A server without IMAP4rev1 is always in IMAP4rev2 mode.
 func (c *Conn) utf8Mode() bool {
+	if !c.server.options.caps().Has(imap.CapIMAP4rev1) {
+		return true
+	}
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	return c.enabled.Has(imap.CapIMAP4rev2) || c.enabled.Has(imap.CapUTF8Accept)
