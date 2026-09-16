@@ -24,8 +24,9 @@ func TestWriteFetchItemsOrder(t *testing.T) {
 		ModSeq:        true,
 		GmailMsgID:    true,
 		GmailThreadID: true,
+		GmailLabels:   true,
 	}
-	want := "(UID BODYSTRUCTURE ENVELOPE FLAGS INTERNALDATE RFC822.SIZE MODSEQ X-GM-MSGID X-GM-THRID)"
+	want := "(UID BODYSTRUCTURE ENVELOPE FLAGS INTERNALDATE RFC822.SIZE MODSEQ X-GM-MSGID X-GM-THRID X-GM-LABELS)"
 
 	for range itemOrderRuns {
 		var buf bytes.Buffer
