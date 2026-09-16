@@ -49,6 +49,9 @@ func (err *DecoderExpectError) Error() string {
 //   - "Expect" methods do the same, but set the decoder error (see Err) on
 //     failure.
 type Decoder struct {
+	// QuotedUTF8 reads mailbox names as UTF-8 instead of modified UTF-7. Set
+	// it in UTF-8 mode, like Encoder.QuotedUTF8.
+	QuotedUTF8 bool
 	// CheckBufferedLiteralFunc is called when a literal is about to be decoded
 	// and needs to be fully buffered in memory.
 	CheckBufferedLiteralFunc func(size int64, nonSync bool) error
@@ -523,6 +526,10 @@ func (dec *Decoder) ExpectMailbox(ptr *string) bool {
 	}
 	if strings.EqualFold(name, "INBOX") {
 		*ptr = "INBOX"
+		return true
+	}
+	if dec.QuotedUTF8 {
+		*ptr = name
 		return true
 	}
 	name, err := utf7.Decode(name)

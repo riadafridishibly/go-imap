@@ -641,6 +641,10 @@ func (c *Client) readResponse() error {
 	c.setReadTimeout(respReadTimeout)
 	defer c.setReadTimeout(idleReadTimeout)
 
+	c.mutex.Lock()
+	c.dec.QuotedUTF8 = c.utf8Mode()
+	c.mutex.Unlock()
+
 	if c.dec.Special('+') {
 		if err := c.readContinueReq(); err != nil {
 			return fmt.Errorf("in continue-req: %w", err)

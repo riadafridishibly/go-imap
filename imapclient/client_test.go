@@ -298,12 +298,13 @@ func TestUTF8Mode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// In UTF-8 mode, a label is kept as sent
-			wantCreate, wantLabel := `CREATE "&ANw-bung"`, "Übung"
+			// In UTF-8 mode, a label or mailbox name is kept as sent, and & is
+			// not escaped
+			wantCreate, wantLabel, wantMailbox := `CREATE "R&-D &ANw-bung"`, "Übung", "R&D"
 			if tc.utf8 {
-				wantCreate, wantLabel = `CREATE "Übung"`, "&ANw-bung"
+				wantCreate, wantLabel, wantMailbox = `CREATE "R&D Übung"`, "&ANw-bung", "R&-D"
 			}
-			resps := []string{"", "* 1 FETCH (X-GM-LABELS (&ANw-bung) UID 1)", ""}
+			resps := []string{"", "* 1 FETCH (X-GM-LABELS (&ANw-bung) UID 1)", `* LIST () "/" "R&-D"`, ""}
 			if tc.enable != "" {
 				resps = append([]string{"* ENABLED " + string(tc.enable)}, resps...)
 			}
@@ -319,7 +320,7 @@ func TestUTF8Mode(t *testing.T) {
 				<-cmds
 			}
 
-			if err := client.Create("Übung", nil).Wait(); err != nil {
+			if err := client.Create("R&D Übung", nil).Wait(); err != nil {
 				t.Fatalf("Create() = %v", err)
 			}
 			if cmd := <-cmds; cmd != wantCreate {
@@ -336,6 +337,18 @@ func TestUTF8Mode(t *testing.T) {
 			}
 			if got := msgs[0].GmailLabels; !slices.Equal(got, []string{wantLabel}) {
 				t.Errorf("Fetch() labels = %q, want [%q]", got, wantLabel)
+			}
+
+			mailboxes, err := client.List("", "*", nil).Collect()
+			<-cmds
+			if err != nil {
+				t.Fatalf("List() = %v", err)
+			}
+			if len(mailboxes) != 1 {
+				t.Fatalf("List() = %d mailboxes, want 1", len(mailboxes))
+			}
+			if got := mailboxes[0].Mailbox; got != wantMailbox {
+				t.Errorf("List() mailbox = %q, want %q", got, wantMailbox)
 			}
 
 			// Outside UTF-8 mode the criteria is a literal, and only the line
