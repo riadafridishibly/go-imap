@@ -61,6 +61,8 @@ func writeFetchItems(enc *imapwire.Encoder, numKind imapwire.NumKind, options *i
 		{"INTERNALDATE", options.InternalDate},
 		{"RFC822.SIZE", options.RFC822Size},
 		{"MODSEQ", options.ModSeq},
+		{"X-GM-MSGID", options.GmailMsgID},
+		{"X-GM-THRID", options.GmailThreadID},
 	}
 	for _, item := range items {
 		if item.req {
@@ -360,6 +362,10 @@ var (
 	_ FetchItemData = FetchItemDataRFC822Size{}
 	_ FetchItemData = FetchItemDataUID{}
 	_ FetchItemData = FetchItemDataBodyStructure{}
+	_ FetchItemData = FetchItemDataBinarySectionSize{}
+	_ FetchItemData = FetchItemDataModSeq{}
+	_ FetchItemData = FetchItemDataGmailMsgID{}
+	_ FetchItemData = FetchItemDataGmailThreadID{}
 )
 
 type discarder interface {
@@ -483,6 +489,24 @@ type FetchItemDataModSeq struct {
 
 func (FetchItemDataModSeq) fetchItemData() {}
 
+// FetchItemDataGmailMsgID holds data returned by FETCH X-GM-MSGID.
+//
+// This requires the X-GM-EXT-1 extension.
+type FetchItemDataGmailMsgID struct {
+	ID uint64
+}
+
+func (FetchItemDataGmailMsgID) fetchItemData() {}
+
+// FetchItemDataGmailThreadID holds data returned by FETCH X-GM-THRID.
+//
+// This requires the X-GM-EXT-1 extension.
+type FetchItemDataGmailThreadID struct {
+	ID uint64
+}
+
+func (FetchItemDataGmailThreadID) fetchItemData() {}
+
 // FetchBodySectionBuffer is a buffer for the data returned by
 // FetchItemBodySection.
 type FetchBodySectionBuffer struct {
@@ -512,6 +536,8 @@ type FetchMessageBuffer struct {
 	BinarySection     []FetchBinarySectionBuffer
 	BinarySectionSize []FetchItemDataBinarySectionSize
 	ModSeq            uint64 // requires CONDSTORE
+	GmailMsgID        uint64 // requires X-GM-EXT-1
+	GmailThreadID     uint64 // requires X-GM-EXT-1
 }
 
 func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
@@ -558,6 +584,10 @@ func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
 		buf.BinarySectionSize = append(buf.BinarySectionSize, item)
 	case FetchItemDataModSeq:
 		buf.ModSeq = item.ModSeq
+	case FetchItemDataGmailMsgID:
+		buf.GmailMsgID = item.ID
+	case FetchItemDataGmailThreadID:
+		buf.GmailThreadID = item.ID
 	default:
 		panic(fmt.Errorf("unsupported fetch item data %T", item))
 	}
@@ -805,6 +835,18 @@ func (c *Client) handleFetch(seqNum uint32) error {
 				return dec.Err()
 			}
 			item = FetchItemDataModSeq{ModSeq: modSeq}
+		case "X-GM-MSGID":
+			var id uint64
+			if !dec.ExpectSP() || !dec.ExpectUint64(&id) {
+				return dec.Err()
+			}
+			item = FetchItemDataGmailMsgID{ID: id}
+		case "X-GM-THRID":
+			var id uint64
+			if !dec.ExpectSP() || !dec.ExpectUint64(&id) {
+				return dec.Err()
+			}
+			item = FetchItemDataGmailThreadID{ID: id}
 		default:
 			return fmt.Errorf("unsupported msg-att name: %q", attName)
 		}

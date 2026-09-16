@@ -76,6 +76,11 @@ const (
 	CapInProgress       Cap = "INPROGRESS"         // RFC 9585
 )
 
+// Vendor capabilities, not in the IANA registry.
+const (
+	CapXGmExt1 Cap = "X-GM-EXT-1" // Gmail
+)
+
 var imap4rev2Caps = CapSet{
 	CapNamespace:    {},
 	CapUnselect:     {},
