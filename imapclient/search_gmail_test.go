@@ -112,3 +112,40 @@ func TestSearchCriteriaIsASCII_gmailLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteSearchKey_gmailRaw(t *testing.T) {
+	and := imap.SearchCriteria{GmailRaw: []string{"in:sent"}}
+	and.And(&imap.SearchCriteria{GmailRaw: []string{"label:work-project-x"}})
+	tests := []struct {
+		name     string
+		criteria imap.SearchCriteria
+		utf8     bool
+		want     string
+	}{
+		{"ascii", imap.SearchCriteria{GmailRaw: []string{`label:work-project-x "a b"`}}, false, `X-GM-RAW "label:work-project-x \"a b\""`},
+		{"non-ascii", imap.SearchCriteria{GmailRaw: []string{"label:Übung"}}, false, "X-GM-RAW {12+}\r\nlabel:Übung"},
+		{"utf8", imap.SearchCriteria{GmailRaw: []string{"label:Übung"}}, true, `X-GM-RAW "label:Übung"`},
+		// Gmail intersects repeated X-GM-RAW keys
+		{"and", and, false, `X-GM-RAW "in:sent" X-GM-RAW "label:work-project-x"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			bw := bufio.NewWriter(&buf)
+			enc := imapwire.NewEncoder(bw, imapwire.ConnSideClient)
+			enc.QuotedUTF8 = tc.utf8
+			enc.LiteralMinus = true
+			writeSearchKey(enc, &tc.criteria)
+			bw.Flush()
+			if got := buf.String(); got != tc.want {
+				t.Errorf("writeSearchKey() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A non-ASCII query makes the client send CHARSET UTF-8 outside UTF-8 mode
+	nonASCII := imap.SearchCriteria{Not: []imap.SearchCriteria{{GmailRaw: []string{"label:Übung"}}}}
+	if searchCriteriaIsASCII(&nonASCII) {
+		t.Error("searchCriteriaIsASCII() = true for a non-ASCII X-GM-RAW query")
+	}
+}
