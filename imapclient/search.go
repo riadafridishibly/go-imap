@@ -16,17 +16,20 @@ func returnSearchOptions(options *imap.SearchOptions) []string {
 		return nil
 	}
 
-	m := map[string]bool{
-		"MIN":   options.ReturnMin,
-		"MAX":   options.ReturnMax,
-		"ALL":   options.ReturnAll,
-		"COUNT": options.ReturnCount,
+	items := []struct {
+		name string
+		ret  bool
+	}{
+		{"MIN", options.ReturnMin},
+		{"MAX", options.ReturnMax},
+		{"ALL", options.ReturnAll},
+		{"COUNT", options.ReturnCount},
 	}
 
 	var l []string
-	for k, ret := range m {
-		if ret {
-			l = append(l, k)
+	for _, item := range items {
+		if item.ret {
+			l = append(l, item.name)
 		}
 	}
 	return l

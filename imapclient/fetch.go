@@ -50,18 +50,21 @@ func writeFetchItems(enc *imapwire.Encoder, numKind imapwire.NumKind, options *i
 		listEnc.Item().Atom("UID")
 	}
 
-	m := map[string]bool{
-		"BODY":          options.BodyStructure != nil && !options.BodyStructure.Extended,
-		"BODYSTRUCTURE": options.BodyStructure != nil && options.BodyStructure.Extended,
-		"ENVELOPE":      options.Envelope,
-		"FLAGS":         options.Flags,
-		"INTERNALDATE":  options.InternalDate,
-		"RFC822.SIZE":   options.RFC822Size,
-		"MODSEQ":        options.ModSeq,
+	items := []struct {
+		name string
+		req  bool
+	}{
+		{"BODY", options.BodyStructure != nil && !options.BodyStructure.Extended},
+		{"BODYSTRUCTURE", options.BodyStructure != nil && options.BodyStructure.Extended},
+		{"ENVELOPE", options.Envelope},
+		{"FLAGS", options.Flags},
+		{"INTERNALDATE", options.InternalDate},
+		{"RFC822.SIZE", options.RFC822Size},
+		{"MODSEQ", options.ModSeq},
 	}
-	for k, req := range m {
-		if req {
-			listEnc.Item().Atom(k)
+	for _, item := range items {
+		if item.req {
+			listEnc.Item().Atom(item.name)
 		}
 	}
 
