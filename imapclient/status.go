@@ -9,22 +9,25 @@ import (
 )
 
 func statusItems(options *imap.StatusOptions) []string {
-	m := map[string]bool{
-		"MESSAGES":        options.NumMessages,
-		"UIDNEXT":         options.UIDNext,
-		"UIDVALIDITY":     options.UIDValidity,
-		"UNSEEN":          options.NumUnseen,
-		"DELETED":         options.NumDeleted,
-		"SIZE":            options.Size,
-		"APPENDLIMIT":     options.AppendLimit,
-		"DELETED-STORAGE": options.DeletedStorage,
-		"HIGHESTMODSEQ":   options.HighestModSeq,
+	items := []struct {
+		name string
+		req  bool
+	}{
+		{"MESSAGES", options.NumMessages},
+		{"UIDNEXT", options.UIDNext},
+		{"UIDVALIDITY", options.UIDValidity},
+		{"UNSEEN", options.NumUnseen},
+		{"DELETED", options.NumDeleted},
+		{"SIZE", options.Size},
+		{"APPENDLIMIT", options.AppendLimit},
+		{"DELETED-STORAGE", options.DeletedStorage},
+		{"HIGHESTMODSEQ", options.HighestModSeq},
 	}
 
 	var l []string
-	for k, req := range m {
-		if req {
-			l = append(l, k)
+	for _, item := range items {
+		if item.req {
+			l = append(l, item.name)
 		}
 	}
 	return l
