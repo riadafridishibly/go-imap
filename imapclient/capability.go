@@ -43,7 +43,9 @@ func readCapabilities(dec *imapwire.Decoder) (imap.CapSet, error) {
 	for dec.SP() {
 		// Some IMAP servers send multiple SP between caps:
 		// https://github.com/emersion/go-imap/pull/652
-		for dec.SP() {
+		// Not dec.SP: it returns true without reading anything before "(",
+		// so this loop would never end.
+		for dec.Special(' ') {
 		}
 
 		cap, err := internal.ExpectCap(dec)
