@@ -374,6 +374,18 @@ func (c *Client) setCaps(caps imap.CapSet) {
 	c.mutex.Unlock()
 }
 
+// utf8Mode reports whether strings and mailbox names are sent and received as
+// UTF-8. A server that lists both IMAP4rev1 and IMAP4rev2 stays in IMAP4rev1
+// mode until ENABLE IMAP4rev2 (RFC 9051 section 7.2.2).
+//
+// The caller must hold c.mutex.
+func (c *Client) utf8Mode() bool {
+	if c.enabled.Has(imap.CapIMAP4rev2) || c.enabled.Has(imap.CapUTF8Accept) {
+		return true
+	}
+	return c.caps.Has(imap.CapIMAP4rev2) && !c.caps.Has(imap.CapIMAP4rev1)
+}
+
 // Mailbox returns the state of the currently selected mailbox.
 //
 // If there is no currently selected mailbox, nil is returned.
@@ -437,7 +449,7 @@ func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
 	}
 
 	c.pendingCmds = append(c.pendingCmds, cmd)
-	quotedUTF8 := c.caps.Has(imap.CapIMAP4rev2) || c.enabled.Has(imap.CapUTF8Accept)
+	quotedUTF8 := c.utf8Mode()
 	literalMinus := c.caps.Has(imap.CapLiteralMinus)
 	literalPlus := c.caps.Has(imap.CapLiteralPlus)
 

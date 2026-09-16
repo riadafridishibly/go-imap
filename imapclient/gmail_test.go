@@ -16,13 +16,18 @@ import (
 // nth command with the lines in resps[n], if any, followed by a tagged OK.
 // Each command, without its tag, is sent on the returned channel.
 func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-chan string) {
+	return newRawServerClientCaps(t, "IMAP4rev1 X-GM-EXT-1", resps...)
+}
+
+// newRawServerClientCaps is newRawServerClient with caps in the greeting.
+func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapclient.Client, <-chan string) {
 	clientConn, serverConn := net.Pipe()
 	cmds := make(chan string, len(resps))
 	go func() {
 		defer close(cmds)
 		// Without CAPABILITY in the greeting, the client sends its own
 		// CAPABILITY command, which would race with the test's commands
-		io.WriteString(serverConn, "* OK [CAPABILITY IMAP4rev1 X-GM-EXT-1] ready\r\n")
+		io.WriteString(serverConn, "* OK [CAPABILITY "+caps+"] ready\r\n")
 		br := bufio.NewReader(serverConn)
 		for _, resp := range resps {
 			line, err := br.ReadString('\n')
