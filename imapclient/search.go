@@ -260,6 +260,9 @@ func writeSearchKey(enc *imapwire.Encoder, criteria *imap.SearchCriteria) {
 		// an unquoted system label
 		encodeItem().Atom("X-GM-LABELS").SP().String(label)
 	}
+	for _, raw := range criteria.GmailRaw {
+		encodeItem().Atom("X-GM-RAW").SP().String(raw)
+	}
 
 	for _, not := range criteria.Not {
 		encodeItem().Atom("NOT").SP()
@@ -394,6 +397,11 @@ func searchCriteriaIsASCII(criteria *imap.SearchCriteria) bool {
 		}
 	}
 	for _, s := range criteria.GmailLabels {
+		if !isASCII(s) {
+			return false
+		}
+	}
+	for _, s := range criteria.GmailRaw {
 		if !isASCII(s) {
 			return false
 		}

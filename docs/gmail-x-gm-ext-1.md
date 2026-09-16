@@ -357,6 +357,10 @@ S: * SEARCH 636
 
 - `X-GM-RAW` uses web search syntax, where a nested label `work/project x` is
   written `work-project-x`.
+- Repeated `X-GM-RAW` keys are intersected, like other search keys. In
+  `[Gmail]/All Mail`, `in:sent` matched 29 messages and `in:inbox` 10;
+  `X-GM-RAW "in:sent" X-GM-RAW "in:inbox"` matched none in either order, and
+  `X-GM-RAW "in:sent" X-GM-RAW "in:anywhere"` matched the same 29.
 - Non-ASCII in `X-GM-RAW` follows the same rule as `X-GM-LABELS`: in default
   mode a quoted string gets `BAD Could not parse command`, and
   `CHARSET UTF-8 X-GM-RAW {12}` with a literal works. With `UTF8=ACCEPT` a

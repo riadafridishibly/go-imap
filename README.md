@@ -30,8 +30,8 @@ maintained separately. It may not stay compatible with upstream:
   - FETCH message id, thread id and labels: `FetchOptions.GmailMsgID`,
     `GmailThreadID` and `GmailLabels`.
   - STORE labels: `Client.StoreGmailLabels`.
-  - SEARCH by message id, thread id and label: `SearchCriteria.GmailMsgID`,
-    `GmailThreadID` and `GmailLabels`.
+  - SEARCH by message id, thread id, label and Gmail web search query:
+    `SearchCriteria.GmailMsgID`, `GmailThreadID`, `GmailLabels` and `GmailRaw`.
 - BODYSTRUCTURE variants sent by real servers: `message/rfc822` and
   `message/global` parts without the envelope, body and line count, a `NIL`
   envelope, and a multipart with no parts. Nesting is limited to 1000 levels,
