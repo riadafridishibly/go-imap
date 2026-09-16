@@ -59,6 +59,13 @@ type SearchCriteria struct {
 	Or  [][2]SearchCriteria
 
 	ModSeq *SearchCriteriaModSeq // requires CONDSTORE
+
+	// Gmail ids, zero means absent. These require X-GM-EXT-1.
+	//
+	// And does not merge these fields: two different ids cannot match the
+	// same message, and one field cannot express that.
+	GmailMsgID    uint64
+	GmailThreadID uint64
 }
 
 // And intersects two search criteria.

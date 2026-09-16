@@ -249,6 +249,13 @@ func writeSearchKey(enc *imapwire.Encoder, criteria *imap.SearchCriteria) {
 		}
 	}
 
+	if criteria.GmailMsgID != 0 {
+		encodeItem().Atom("X-GM-MSGID").SP().Uint64(criteria.GmailMsgID)
+	}
+	if criteria.GmailThreadID != 0 {
+		encodeItem().Atom("X-GM-THRID").SP().Uint64(criteria.GmailThreadID)
+	}
+
 	for _, not := range criteria.Not {
 		encodeItem().Atom("NOT").SP()
 		enc.Special('(')
