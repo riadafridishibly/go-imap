@@ -11,6 +11,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/internal"
 	"github.com/emersion/go-imap/v2/internal/imapwire"
+	"github.com/emersion/go-imap/v2/internal/utf7"
 	"github.com/emersion/go-message/mail"
 )
 
@@ -63,6 +64,7 @@ func writeFetchItems(enc *imapwire.Encoder, numKind imapwire.NumKind, options *i
 		{"MODSEQ", options.ModSeq},
 		{"X-GM-MSGID", options.GmailMsgID},
 		{"X-GM-THRID", options.GmailThreadID},
+		{"X-GM-LABELS", options.GmailLabels},
 	}
 	for _, item := range items {
 		if item.req {
@@ -366,6 +368,7 @@ var (
 	_ FetchItemData = FetchItemDataModSeq{}
 	_ FetchItemData = FetchItemDataGmailMsgID{}
 	_ FetchItemData = FetchItemDataGmailThreadID{}
+	_ FetchItemData = FetchItemDataGmailLabels{}
 )
 
 type discarder interface {
@@ -507,6 +510,20 @@ type FetchItemDataGmailThreadID struct {
 
 func (FetchItemDataGmailThreadID) fetchItemData() {}
 
+// FetchItemDataGmailLabels holds data returned by FETCH X-GM-LABELS.
+//
+// The list is complete only when fetched from the mailbox with the \All
+// attribute: Gmail leaves out the label of the selected mailbox, for example
+// \Inbox in INBOX. A leading backslash does not mark a system label, since
+// Gmail accepts user labels such as \foo.
+//
+// This requires the X-GM-EXT-1 extension.
+type FetchItemDataGmailLabels struct {
+	Labels []string
+}
+
+func (FetchItemDataGmailLabels) fetchItemData() {}
+
 // FetchBodySectionBuffer is a buffer for the data returned by
 // FetchItemBodySection.
 type FetchBodySectionBuffer struct {
@@ -535,9 +552,10 @@ type FetchMessageBuffer struct {
 	BodySection       []FetchBodySectionBuffer
 	BinarySection     []FetchBinarySectionBuffer
 	BinarySectionSize []FetchItemDataBinarySectionSize
-	ModSeq            uint64 // requires CONDSTORE
-	GmailMsgID        uint64 // requires X-GM-EXT-1
-	GmailThreadID     uint64 // requires X-GM-EXT-1
+	ModSeq            uint64   // requires CONDSTORE
+	GmailMsgID        uint64   // requires X-GM-EXT-1
+	GmailThreadID     uint64   // requires X-GM-EXT-1
+	GmailLabels       []string // requires X-GM-EXT-1
 }
 
 func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
@@ -588,6 +606,8 @@ func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
 		buf.GmailMsgID = item.ID
 	case FetchItemDataGmailThreadID:
 		buf.GmailThreadID = item.ID
+	case FetchItemDataGmailLabels:
+		buf.GmailLabels = item.Labels
 	default:
 		panic(fmt.Errorf("unsupported fetch item data %T", item))
 	}
@@ -847,6 +867,19 @@ func (c *Client) handleFetch(seqNum uint32) error {
 				return dec.Err()
 			}
 			item = FetchItemDataGmailThreadID{ID: id}
+		case "X-GM-LABELS":
+			if !dec.ExpectSP() {
+				return dec.Err()
+			}
+			// Same condition that sets QuotedUTF8 on the encoder
+			c.mutex.Lock()
+			utf8Mode := c.caps.Has(imap.CapIMAP4rev2) || c.enabled.Has(imap.CapUTF8Accept)
+			c.mutex.Unlock()
+			labels, err := readGmailLabels(dec, utf8Mode)
+			if err != nil {
+				return err
+			}
+			item = FetchItemDataGmailLabels{Labels: labels}
 		default:
 			return fmt.Errorf("unsupported msg-att name: %q", attName)
 		}
@@ -872,6 +905,35 @@ func (c *Client) handleFetch(seqNum uint32) error {
 
 func isMsgAttNameChar(ch byte) bool {
 	return ch != '[' && imapwire.IsAtomChar(ch)
+}
+
+// readGmailLabels reads an X-GM-LABELS list. Outside UTF-8 mode, Gmail sends
+// names in modified UTF-7.
+func readGmailLabels(dec *imapwire.Decoder, utf8Mode bool) ([]string, error) {
+	var labels []string
+	err := dec.ExpectNList(func() error {
+		// Some servers start the list with a space, see ExpectFlagList
+		dec.SP()
+
+		var label string
+		if dec.Special('\\') {
+			if !dec.ExpectAtom(&label) {
+				return dec.Err()
+			}
+			label = `\` + label
+		} else if !dec.ExpectAString(&label) {
+			return dec.Err()
+		}
+		if !utf8Mode {
+			var err error
+			if label, err = utf7.Decode(label); err != nil {
+				return fmt.Errorf("in X-GM-LABELS: %w", err)
+			}
+		}
+		labels = append(labels, label)
+		return nil
+	})
+	return labels, err
 }
 
 func readEnvelope(dec *imapwire.Decoder, options *Options) (*imap.Envelope, error) {

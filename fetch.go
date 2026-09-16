@@ -21,6 +21,7 @@ type FetchOptions struct {
 	ModSeq            bool                          // requires CONDSTORE
 	GmailMsgID        bool                          // requires X-GM-EXT-1
 	GmailThreadID     bool                          // requires X-GM-EXT-1
+	GmailLabels       bool                          // requires X-GM-EXT-1
 
 	ChangedSince uint64 // requires CONDSTORE
 }
