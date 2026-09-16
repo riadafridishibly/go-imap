@@ -151,3 +151,42 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 		})
 	}
 }
+
+// slowClient is a SASL mechanism whose Next takes a while.
+type slowClient struct{}
+
+func (slowClient) Start() (string, []byte, error) { return "X-TEST", []byte("ir"), nil }
+func (slowClient) Next([]byte) ([]byte, error) {
+	time.Sleep(100 * time.Millisecond)
+	return []byte("resp"), nil
+}
+
+// The server ends AUTHENTICATE right after a challenge, before the client has
+// answered it. The client then waits for a challenge on a finished command.
+func TestClient_Authenticate_completedDuringNext(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	go func() {
+		defer serverConn.Close()
+		serverConn.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(serverConn, "* OK [CAPABILITY IMAP4rev1 SASL-IR] ready\r\n")
+		br := bufio.NewReader(serverConn)
+		line, _ := br.ReadString('\n')
+		tag, _, _ := strings.Cut(line, " ")
+		io.WriteString(serverConn, "+ Zm9v\r\n"+tag+" NO [AUTHENTICATIONFAILED] Invalid credentials\r\n")
+		io.Copy(io.Discard, br)
+	}()
+	client := imapclient.New(clientConn, nil)
+	defer client.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- client.Authenticate(slowClient{}) }()
+	select {
+	case err := <-done:
+		var imapErr *imap.Error
+		if !errors.As(err, &imapErr) || imapErr.Code != imap.ResponseCodeAuthenticationFailed {
+			t.Errorf("Authenticate() = %v, want the server's NO", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Authenticate() blocked")
+	}
+}

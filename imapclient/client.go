@@ -520,6 +520,7 @@ func (c *Client) completeCommand(cmd command, err error) {
 
 	// Ensure the command is not blocked waiting on continuation requests
 	c.mutex.Lock()
+	cmd.base().completed = true
 	var filtered []continuationRequest
 	for _, contReq := range c.contReqs {
 		if contReq.cmd != cmd.base() {
@@ -580,6 +581,14 @@ func (c *Client) registerContReq(cmd command) *imapwire.ContinuationRequest {
 	contReq := imapwire.NewContinuationRequest()
 
 	c.mutex.Lock()
+	if cmd.base().completed {
+		// The server has already ended the command, for instance right
+		// after a SASL challenge. No continuation request will come, and
+		// completeCommand has already cancelled the others.
+		c.mutex.Unlock()
+		contReq.Cancel(nil)
+		return contReq
+	}
 	c.contReqs = append(c.contReqs, continuationRequest{
 		ContinuationRequest: contReq,
 		cmd:                 cmd.base(),
@@ -1248,9 +1257,10 @@ type command interface {
 }
 
 type commandBase struct {
-	tag  string
-	done chan error
-	err  error
+	tag       string
+	done      chan error
+	err       error
+	completed bool // protected by Client.mutex
 }
 
 func (cmd *commandBase) base() *commandBase {
