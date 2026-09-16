@@ -43,7 +43,7 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 
 		if challengeStr == "" {
 			if initialResp == nil {
-				return fmt.Errorf("imapclient: server requested SASL initial response, but we don't have one")
+				return c.cancelSASL(cmd, fmt.Errorf("imapclient: server requested SASL initial response, but we don't have one"))
 			}
 
 			contReq = c.registerContReq(cmd)
@@ -56,12 +56,12 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 
 		challenge, err := internal.DecodeSASL(challengeStr)
 		if err != nil {
-			return err
+			return c.cancelSASL(cmd, err)
 		}
 
 		resp, err := saslClient.Next(challenge)
 		if err != nil {
-			return err
+			return c.cancelSASL(cmd, err)
 		}
 
 		contReq = c.registerContReq(cmd)
@@ -73,6 +73,21 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 
 type authenticateCommand struct {
 	commandBase
+}
+
+// cancelSASL cancels the SASL exchange after a continuation request, so that
+// the server leaves it and the connection stays usable. It returns err, with
+// the server's response (usually NO or BAD) attached.
+func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
+	c.bw.WriteString("*\r\n")
+	cancelErr := c.bw.Flush() // also reports a WriteString error
+	if cancelErr == nil {
+		cancelErr = cmd.wait()
+	}
+	if cancelErr != nil {
+		return fmt.Errorf("%w: %w", err, cancelErr)
+	}
+	return err
 }
 
 func (c *Client) writeSASLResp(resp []byte) error {
