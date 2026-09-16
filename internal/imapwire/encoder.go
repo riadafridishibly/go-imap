@@ -214,9 +214,13 @@ func (enc *Encoder) Number64(v int64) *Encoder {
 	return enc.writeString(strconv.FormatInt(v, 10))
 }
 
+func (enc *Encoder) Uint64(v uint64) *Encoder {
+	return enc.writeString(strconv.FormatUint(v, 10))
+}
+
 func (enc *Encoder) ModSeq(v uint64) *Encoder {
 	// TODO: disallow zero values
-	return enc.writeString(strconv.FormatUint(v, 10))
+	return enc.Uint64(v)
 }
 
 // List writes a parenthesized list.

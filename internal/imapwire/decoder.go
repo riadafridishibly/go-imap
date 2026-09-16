@@ -361,7 +361,7 @@ func (dec *Decoder) ExpectNumber64(ptr *int64) bool {
 	return dec.Expect(dec.Number64(ptr), "number64")
 }
 
-func (dec *Decoder) ModSeq(ptr *uint64) bool {
+func (dec *Decoder) Uint64(ptr *uint64) bool {
 	s, ok := dec.numberStr()
 	if !ok {
 		return false
@@ -372,6 +372,14 @@ func (dec *Decoder) ModSeq(ptr *uint64) bool {
 	}
 	*ptr = v
 	return true
+}
+
+func (dec *Decoder) ExpectUint64(ptr *uint64) bool {
+	return dec.Expect(dec.Uint64(ptr), "uint64")
+}
+
+func (dec *Decoder) ModSeq(ptr *uint64) bool {
+	return dec.Uint64(ptr)
 }
 
 func (dec *Decoder) ExpectModSeq(ptr *uint64) bool {
