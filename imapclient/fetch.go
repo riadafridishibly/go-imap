@@ -871,10 +871,7 @@ func (c *Client) handleFetch(seqNum uint32) error {
 			if !dec.ExpectSP() {
 				return dec.Err()
 			}
-			c.mutex.Lock()
-			utf8Mode := c.utf8Mode()
-			c.mutex.Unlock()
-			labels, err := readGmailLabels(dec, utf8Mode)
+			labels, err := readGmailLabels(dec)
 			if err != nil {
 				return err
 			}
@@ -908,7 +905,7 @@ func isMsgAttNameChar(ch byte) bool {
 
 // readGmailLabels reads an X-GM-LABELS list. Outside UTF-8 mode, Gmail sends
 // names in modified UTF-7.
-func readGmailLabels(dec *imapwire.Decoder, utf8Mode bool) ([]string, error) {
+func readGmailLabels(dec *imapwire.Decoder) ([]string, error) {
 	var labels []string
 	err := dec.ExpectNList(func() error {
 		// Some servers start the list with a space, see ExpectFlagList
@@ -923,7 +920,7 @@ func readGmailLabels(dec *imapwire.Decoder, utf8Mode bool) ([]string, error) {
 		} else if !dec.ExpectAString(&label) {
 			return dec.Err()
 		}
-		if !utf8Mode {
+		if !dec.QuotedUTF8 {
 			var err error
 			if label, err = utf7.Decode(label); err != nil {
 				return fmt.Errorf("in X-GM-LABELS: %w", err)
