@@ -190,3 +190,86 @@ func TestClient_Authenticate_completedDuringNext(t *testing.T) {
 		t.Fatal("Authenticate() blocked")
 	}
 }
+
+// fuzzSASLClient is a SASL mechanism whose behavior is picked by mode%4.
+type fuzzSASLClient struct{ mode uint8 }
+
+func (c fuzzSASLClient) Start() (string, []byte, error) {
+	if c.mode%4 == 3 {
+		return "X-TEST", nil, nil
+	}
+	return "X-TEST", []byte("ir"), nil
+}
+
+func (c fuzzSASLClient) Next([]byte) ([]byte, error) {
+	switch c.mode % 4 {
+	case 0:
+		return nil, errors.New("mechanism failed")
+	case 1:
+		return []byte{}, nil
+	default:
+		return []byte("resp"), nil
+	}
+}
+
+// FuzzAuthenticate checks that Authenticate, then NOOP and Close, return
+// whatever the server sends before it closes the connection. A server that
+// stays silent is left to the SASL timeout, which takes 30 s.
+//
+// mode%4 picks the mechanism's behavior, and mode&4 turns off SASL-IR. In the
+// script, lines are separated by "\n" and TAG is the AUTHENTICATE tag.
+func FuzzAuthenticate(f *testing.F) {
+	gmailChallenge := "+ eyJzdGF0dXMiOiJpbnZhbGlkX3JlcXVlc3QiLCJzY29wZSI6Imh0dHBzOi8vbWFpbC5nb29nbGUuY29tLyJ9"
+	f.Add(uint8(0), gmailChallenge+"\nTAG NO [AUTHENTICATIONFAILED] Invalid credentials")
+	f.Add(uint8(0), gmailChallenge+"\nTAG OK [CAPABILITY IMAP4rev1] done")
+	f.Add(uint8(1), "+ \n+ \nTAG OK done")
+	f.Add(uint8(2), "+ Zm9v\n+ Zm9v\nTAG BAD done")
+	f.Add(uint8(7), "+ \n+ !\n* BYE bye")
+	// The server ends the command during Next. Found by fuzzing, but whether
+	// it hangs depends on timing: TestClient_Authenticate_completedDuringNext
+	// checks this case reliably.
+	f.Add(uint8(0x12), "* CAPABILITY IMAP4rev1\n+ Zm9v\nTAG OK x\n+ Zm9v")
+	// The read goroutine looped forever (#39)
+	f.Add(uint8(0), "* CAPABILITY (")
+	f.Fuzz(func(t *testing.T, mode uint8, script string) {
+		caps := "IMAP4rev1 SASL-IR"
+		if mode&4 != 0 {
+			caps = "IMAP4rev1"
+		}
+		clientConn, serverConn := net.Pipe()
+		go func() {
+			defer serverConn.Close()
+			serverConn.SetDeadline(time.Now().Add(2 * time.Second))
+			io.WriteString(serverConn, "* OK [CAPABILITY "+caps+"] ready\r\n")
+			br := bufio.NewReader(serverConn)
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			tag, _, _ := strings.Cut(line, " ")
+			go io.Copy(io.Discard, br)
+			for _, l := range strings.Split(script, "\n") {
+				if _, err := io.WriteString(serverConn, strings.ReplaceAll(l, "TAG", tag)+"\r\n"); err != nil {
+					return
+				}
+			}
+		}()
+		client := imapclient.New(clientConn, nil)
+
+		returnsWithin := func(name string, f func()) {
+			done := make(chan struct{})
+			go func() {
+				f()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%v blocked", name)
+			}
+		}
+		returnsWithin("Authenticate()", func() { client.Authenticate(fuzzSASLClient{mode}) })
+		returnsWithin("Noop()", func() { client.Noop().Wait() })
+		returnsWithin("Close()", func() { client.Close() })
+	})
+}
