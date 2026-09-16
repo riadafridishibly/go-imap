@@ -40,37 +40,54 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 	oauth := sasl.NewOAuthBearerClient(&sasl.OAuthBearerOptions{Username: "user", Token: "bad"})
 	// Gmail's reply to a bad token
 	gmailChallenge := "+ eyJzdGF0dXMiOiJpbnZhbGlkX3JlcXVlc3QiLCJzY29wZSI6Imh0dHBzOi8vbWFpbC5nb29nbGUuY29tLyJ9"
+	gmailNO := "TAG NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)"
 	tests := []struct {
 		name      string
 		sasl      sasl.Client
 		challenge string
-		accept    bool   // the server answers the cancellation with OK
-		wantErr   string // prefix, followed by the server's NO unless accept
+		reply     string // the server's answer to "*", TAG is the command tag; empty closes the connection
+		wantErr   string // prefix
 	}{
 		{
 			name:      "mechanism error",
 			sasl:      oauth,
 			challenge: gmailChallenge,
-			wantErr:   "OAUTHBEARER authentication error (invalid_request): ",
+			reply:     gmailNO,
+			wantErr:   "OAUTHBEARER authentication error (invalid_request): imap: NO [AUTHENTICATIONFAILED]",
 		},
 		{
 			name:      "invalid base64",
 			sasl:      oauth,
 			challenge: "+ !",
-			wantErr:   "illegal base64 data at input byte 0: ",
+			reply:     gmailNO,
+			wantErr:   "illegal base64 data at input byte 0: imap: NO [AUTHENTICATIONFAILED]",
 		},
 		{
 			name:      "no initial response",
 			sasl:      noInitialResponseClient{},
 			challenge: "+ ",
-			wantErr:   "imapclient: server requested SASL initial response, but we don't have one: ",
+			reply:     gmailNO,
+			wantErr:   "imapclient: server requested SASL initial response, but we don't have one: imap: NO [AUTHENTICATIONFAILED]",
 		},
 		{
 			name:      "cancellation accepted",
 			sasl:      oauth,
 			challenge: gmailChallenge,
-			accept:    true,
+			reply:     "TAG OK done",
 			wantErr:   "OAUTHBEARER authentication error (invalid_request)",
+		},
+		{
+			name:      "another challenge",
+			sasl:      oauth,
+			challenge: gmailChallenge,
+			reply:     gmailChallenge,
+			wantErr:   "OAUTHBEARER authentication error (invalid_request): in continue-req: received unmatched continuation request",
+		},
+		{
+			name:      "connection closed",
+			sasl:      oauth,
+			challenge: gmailChallenge,
+			wantErr:   "OAUTHBEARER authentication error (invalid_request): unexpected EOF",
 		},
 	}
 	for _, tc := range tests {
@@ -88,14 +105,10 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 				io.WriteString(serverConn, tc.challenge+"\r\n")
 				line, _ = br.ReadString('\n')
 				cancelLine <- line
-				if line != "*\r\n" {
+				if line != "*\r\n" || tc.reply == "" {
 					return
 				}
-				reply := " NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)"
-				if tc.accept {
-					reply = " OK done"
-				}
-				io.WriteString(serverConn, tag+reply+"\r\n")
+				io.WriteString(serverConn, strings.Replace(tc.reply, "TAG", tag, 1)+"\r\n")
 				line, _ = br.ReadString('\n')
 				tag, _, _ = strings.Cut(line, " ")
 				io.WriteString(serverConn, tag+" OK done\r\n")
@@ -114,9 +127,9 @@ func TestClient_Authenticate_cancel(t *testing.T) {
 			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
 				t.Errorf("Authenticate() = %v, want prefix %q", err, tc.wantErr)
 			}
-			if tc.accept {
-				// The client gave up on the exchange, so it must not end up
-				// authenticated
+			if tc.reply != gmailNO {
+				// The server didn't end the exchange as expected, so the
+				// connection can't be trusted
 				if state != imap.ConnStateLogout {
 					t.Errorf("State() = %v, want %v", state, imap.ConnStateLogout)
 				}

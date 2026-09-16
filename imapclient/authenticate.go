@@ -2,6 +2,8 @@ package imapclient
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/emersion/go-sasl"
 
@@ -41,7 +43,9 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 	defer enc.end()
 
 	for {
+		timer := c.closeOnSASLTimeout()
 		challengeStr, err := contReq.Wait()
+		timer.Stop()
 		if err != nil {
 			return cmd.wait()
 		}
@@ -86,7 +90,9 @@ type authenticateCommand struct {
 func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
 	cancelErr := c.writeSASLLine("*")
 	if cancelErr == nil {
+		timer := c.closeOnSASLTimeout()
 		cancelErr = cmd.wait()
+		timer.Stop()
 	}
 	if cancelErr == nil {
 		// The server completed an exchange the client gave up on, and the
@@ -95,6 +101,17 @@ func (c *Client) cancelSASL(cmd *authenticateCommand, err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %w", err, cancelErr)
+}
+
+// closeOnSASLTimeout closes the connection if the server doesn't answer within
+// respReadTimeout. While waiting for the next response the client has no read
+// timeout, so a silent server would block Authenticate forever. Closing the
+// connection completes the command, which ends the wait. Stop the returned
+// timer once the server has answered.
+func (c *Client) closeOnSASLTimeout() *time.Timer {
+	return time.AfterFunc(respReadTimeout, func() {
+		c.closeWithError(fmt.Errorf("imapclient: no answer to SASL exchange: %w", os.ErrDeadlineExceeded))
+	})
 }
 
 // writeSASLLine writes a line of the SASL exchange. If that fails, the server
