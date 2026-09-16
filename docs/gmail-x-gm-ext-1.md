@@ -304,6 +304,11 @@ C: a1 UID STORE 636 -X-GM-LABELS.SILENT ("work/project x")
 S: a1 OK Success
 ```
 
+It does not suppress the FETCH with `FLAGS` that follows a `\Starred` change.
+`-X-GM-LABELS.SILENT (\Starred)` still returned one FETCH with `UID` and the
+new `FLAGS`, and no `X-GM-LABELS`. This was seen through `imapclient` after
+#29, without a raw transcript.
+
 With a stale value, `UNCHANGEDSINCE` fails the store with `MODIFIED` and
 returns the current labels (the success path was not tested):
 

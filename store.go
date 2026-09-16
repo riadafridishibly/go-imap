@@ -20,3 +20,12 @@ type StoreFlags struct {
 	Silent bool
 	Flags  []Flag
 }
+
+// StoreGmailLabels alters Gmail labels.
+//
+// This requires the X-GM-EXT-1 extension.
+type StoreGmailLabels struct {
+	Op     StoreFlagsOp
+	Silent bool
+	Labels []string
+}
