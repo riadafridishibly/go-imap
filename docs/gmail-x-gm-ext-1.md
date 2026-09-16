@@ -237,6 +237,10 @@ C: Übung
 S: * SEARCH 636
 ```
 
+A non-synchronizing literal (`LITERAL-`) works too. Through `imapclient`,
+`UID SEARCH CHARSET UTF-8 X-GM-LABELS {12+}` with `Probe Übung` matched, also
+inside `NOT (...)`.
+
 With `UTF8=ACCEPT`, `UID SEARCH X-GM-LABELS "Übung"` matches directly.
 
 System labels must be quoted in SEARCH. STORE accepts both forms:

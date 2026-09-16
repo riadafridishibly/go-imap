@@ -62,6 +62,7 @@ type SearchCriteria struct {
 
 	GmailMsgID    []uint64 // requires X-GM-EXT-1
 	GmailThreadID []uint64 // requires X-GM-EXT-1
+	GmailLabels   []string // requires X-GM-EXT-1
 }
 
 // And intersects two search criteria.
@@ -93,6 +94,7 @@ func (criteria *SearchCriteria) And(other *SearchCriteria) {
 
 	criteria.GmailMsgID = append(criteria.GmailMsgID, other.GmailMsgID...)
 	criteria.GmailThreadID = append(criteria.GmailThreadID, other.GmailThreadID...)
+	criteria.GmailLabels = append(criteria.GmailLabels, other.GmailLabels...)
 }
 
 func intersectSince(t1, t2 time.Time) time.Time {
