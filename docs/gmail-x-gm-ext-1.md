@@ -14,6 +14,8 @@ Google's reference: https://developers.google.com/workspace/gmail/imap/imap-exte
 - A raw TLS client that tags commands and prints both sides. `imapclient` could
   not be used: it closes the connection on the first `X-GM-*` attribute (#3).
 - Labels were created, applied to one message, and removed again afterwards.
+- To see how ids are formed, messages were appended to `INBOX` with chosen
+  dates and deleted through `[Gmail]/Trash` afterwards.
 - Excerpts below are copied from the transcripts, with tags renumbered and
   unrelated lines left out.
 
@@ -59,12 +61,43 @@ All 651 messages came back as `X-GM-THRID X-GM-MSGID X-GM-LABELS UID`.
 ### Message and thread ids
 
 - Unsigned decimal, as documented.
-- The largest `X-GM-MSGID` in the account was `1876409439502535953`, below
-  `math.MaxInt64`. No id above `MaxInt64` was seen, so a test for one has to
-  use a synthetic value.
 - For 646 of 651 messages `X-GM-THRID` equals `X-GM-MSGID`. Where they differ,
   the thread id is another message's `X-GM-MSGID`, consistent with a thread
   taking the id of its first message.
+
+### Id layout
+
+Google does not document it, but the top 44 bits of `X-GM-MSGID` are the
+message's INTERNALDATE in milliseconds since the Unix epoch:
+
+```
+1876409439502535953 >> 20 = 1789483489515 = 2026-09-15 14:44:49.515 UTC
+```
+
+- For all 651 messages, `id >> 20` matched INTERNALDATE: 595 to the second, the
+  other 56 within 1.33 s. INTERNALDATE has one-second precision; the id also
+  carries milliseconds.
+- The id follows INTERNALDATE, not the time Gmail stored the message. A message
+  appended with the date `"01-Jan-2001 00:00:00 +0000"` got an old id:
+
+  ```
+  S: * 12 FETCH (X-GM-THRID 1025829451352874949 X-GM-MSGID 1025829451352874949 UID 12 INTERNALDATE "01-Jan-2001 00:00:00 +0000")
+  ```
+
+  `1025829451352874949 >> 20` is 2001-01-01 00:00:00.768 UTC.
+- APPEND dates before 1970 or in the future are replaced with the current time,
+  and the id follows. Dates in 1900, 1960, 2027 (3.5 months ahead), 2249 and
+  2300 were all stored as the time of the APPEND. `01-Jan-1970 00:00:00 +0000`
+  was kept:
+
+  ```
+  S: * 13 FETCH (X-GM-THRID 161198677 X-GM-MSGID 161198677 UID 16 INTERNALDATE "01-Jan-1970 00:00:00 +0000")
+  ```
+
+- Ids are therefore not in arrival order.
+- With INTERNALDATE held between 1970 and now, an id stays below `now << 20`.
+  The first id above `math.MaxInt64` would belong to a message dated
+  2248-09-26 or later.
 
 ### Label list forms
 
@@ -340,6 +373,10 @@ S: * SEARCH 636
 - SEARCH must send the decoded name, and a non-ASCII label or `X-GM-RAW` query
   must set `CHARSET UTF-8` in default mode.
 - Replies cannot be relied on to put `UID` first.
+- Ids should be `uint64`, as documented. Real ids fit in `int64` under the
+  layout above, but the layout is undocumented, so a test for a value above
+  `math.MaxInt64` has to use a synthetic id.
+- Sorting by `X-GM-MSGID` does not give arrival order.
 - Existing bug, separate from the X-GM work (#20): with `UTF8=ACCEPT` enabled,
   `Encoder.Mailbox` escapes `&` as `&-`, so `Create("Q&A")` creates a mailbox
   named `Q&-A` on Gmail, and `ExpectMailbox` runs `utf7.Decode` on every name,
@@ -351,6 +388,7 @@ S: * SEARCH 636
 - `NIL` in place of a label list.
 - A label sent as a literal.
 - Label names containing `"` or `\` after the first character.
-- Ids above `math.MaxInt64`.
+- How far in the future an APPEND date can be before Gmail replaces it. A date
+  3.5 months ahead was replaced.
 - Unsolicited `X-GM-*` attributes, for example during IDLE.
 - XOAUTH2 login.
