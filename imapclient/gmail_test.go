@@ -14,7 +14,9 @@ import (
 
 // newRawServerClient returns a client connected to a server that answers the
 // nth command with the lines in resps[n], if any, followed by a tagged OK.
-// Each command, without its tag, is sent on the returned channel.
+// If the last line of resps[n] starts with "TAG ", it replaces the tagged OK,
+// with TAG set to the command's tag. Each command, without its tag, is sent on
+// the returned channel.
 func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-chan string) {
 	return newRawServerClientCaps(t, "IMAP4rev1 X-GM-EXT-1", resps...)
 }
@@ -36,10 +38,14 @@ func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapcl
 			}
 			tag, cmd, _ := strings.Cut(strings.TrimSuffix(line, "\r\n"), " ")
 			cmds <- cmd
+			status := tag + " OK done"
+			if i := strings.LastIndex(resp, "\n") + 1; strings.HasPrefix(resp[i:], "TAG ") {
+				resp, status = strings.TrimSuffix(resp[:i], "\r\n"), tag+resp[i+len("TAG"):]
+			}
 			if resp != "" {
 				resp += "\r\n"
 			}
-			io.WriteString(serverConn, resp+tag+" OK done\r\n")
+			io.WriteString(serverConn, resp+status+"\r\n")
 		}
 	}()
 	client := imapclient.New(clientConn, nil)

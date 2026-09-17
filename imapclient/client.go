@@ -784,8 +784,8 @@ func (c *Client) readResponseTagged(tag, typ string) (startTLS *startTLSCommand,
 				cmd.data.SourceUIDs = srcUIDs
 				cmd.data.DestUIDs = dstUIDs
 			case *MoveCommand:
-				// This can happen when Client.Move falls back to COPY +
-				// STORE + EXPUNGE
+				// RFC 6851 section 4.3 advises the untagged form, but some
+				// servers use the tagged one as for COPY
 				cmd.data.UIDValidity = uidValidity
 				cmd.data.SourceUIDs = srcUIDs
 				cmd.data.DestUIDs = dstUIDs

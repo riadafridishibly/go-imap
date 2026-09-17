@@ -49,6 +49,11 @@ maintained separately. It may not stay compatible with upstream:
   it, and the returned error wraps the mechanism's error and the server's
   response. Compare it with `errors.Is` or `errors.As`, not `==` or a type
   assertion.
+- On a server without MOVE, `Client.Move` sends each fallback command only
+  after the previous one succeeds, and blocks until they complete. It uses
+  `UID EXPUNGE`, so it requires UIDPLUS: without it, `Move` returns an error
+  and sends nothing. Upstream sends all three commands at once, deletes the
+  messages even if COPY fails, and uses plain `EXPUNGE` without UIDPLUS.
 
 ## Usage
 
