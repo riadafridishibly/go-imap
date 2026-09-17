@@ -45,6 +45,10 @@ maintained separately. It may not stay compatible with upstream:
 - `BodyStructureMessageRFC822.Envelope` can be nil,
   `BodyStructureSinglePart.MessageRFC822` can be nil for more responses, and
   `BodyStructureMultiPart.Children` can be empty.
+- When a SASL exchange fails on the client side, `Client.Authenticate` cancels
+  it, and the returned error wraps the mechanism's error and the server's
+  response. Compare it with `errors.Is` or `errors.As`, not `==` or a type
+  assertion.
 
 ## Usage
 
