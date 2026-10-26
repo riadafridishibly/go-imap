@@ -69,6 +69,10 @@ generated from upstream and do not list the additions above:
 - [Client docs]
 - [Server docs]
 
+## Contributing
+
+See [CONTRIBUTING.md] for contribution guidelines.
+
 ## License
 
 MIT
@@ -78,3 +82,4 @@ MIT
 [v1 branch]: https://github.com/emersion/go-imap/tree/v1
 [Client docs]: https://pkg.go.dev/github.com/emersion/go-imap/v2/imapclient
 [Server docs]: https://pkg.go.dev/github.com/emersion/go-imap/v2/imapserver
+[CONTRIBUTING.md]: https://github.com/emersion/.github/blob/main/CONTRIBUTING.md
