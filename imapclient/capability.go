@@ -23,8 +23,19 @@ func (c *Client) handleCapability() error {
 	c.setCaps(caps)
 	if cmd := findPendingCmdByType[*CapabilityCommand](c); cmd != nil {
 		cmd.caps = caps
+	} else if cmd := c.findPendingCmdFunc(isAuthCommand); cmd != nil {
+		// Gmail sends the new list untagged with the LOGIN or AUTHENTICATE reply
+		cmd.base().capsRecv = true
 	}
 	return nil
+}
+
+func isAuthCommand(cmd command) bool {
+	switch cmd.(type) {
+	case *loginCommand, *authenticateCommand, *unauthenticateCommand:
+		return true
+	}
+	return false
 }
 
 // CapabilityCommand is a CAPABILITY command.

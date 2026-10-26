@@ -91,22 +91,24 @@ func TestCaps_greetingWithoutCaps(t *testing.T) {
 	}
 }
 
+// authCommandTests run commands that change the capabilities.
+var authCommandTests = []struct {
+	name string
+	run  func(client *imapclient.Client) error
+}{
+	{"LOGIN", func(client *imapclient.Client) error {
+		return client.Login("user", "pass").Wait()
+	}},
+	{"AUTHENTICATE", func(client *imapclient.Client) error {
+		return client.Authenticate(sasl.NewPlainClient("", "user", "pass"))
+	}},
+	{"UNAUTHENTICATE", func(client *imapclient.Client) error {
+		return client.Unauthenticate().Wait()
+	}},
+}
+
 func TestCaps_refresh(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(client *imapclient.Client) error
-	}{
-		{"LOGIN", func(client *imapclient.Client) error {
-			return client.Login("user", "pass").Wait()
-		}},
-		{"AUTHENTICATE", func(client *imapclient.Client) error {
-			return client.Authenticate(sasl.NewPlainClient("", "user", "pass"))
-		}},
-		{"UNAUTHENTICATE", func(client *imapclient.Client) error {
-			return client.Unauthenticate().Wait()
-		}},
-	}
-	for _, tc := range tests {
+	for _, tc := range authCommandTests {
 		t.Run(tc.name, func(t *testing.T) {
 			client, cmds := newRawServerClientCaps(t, "IMAP4rev1 SASL-IR", "", "* CAPABILITY IMAP4rev1 MOVE")
 			if err := tc.run(client); err != nil {
@@ -123,6 +125,27 @@ func TestCaps_refresh(t *testing.T) {
 				}
 			default:
 				t.Fatalf("%v returned before CAPABILITY was sent", tc.name)
+			}
+			if !client.Caps().Has(imap.CapMove) {
+				t.Errorf("Caps() = %v, want MOVE", client.Caps())
+			}
+		})
+	}
+}
+
+// Gmail sends the new list untagged with the reply, not in the tagged OK.
+func TestCaps_untaggedWithAuth(t *testing.T) {
+	for _, tc := range authCommandTests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cmds := newRawServerClientCaps(t, "IMAP4rev1 SASL-IR", "* CAPABILITY IMAP4rev1 MOVE", "")
+			if err := tc.run(client); err != nil {
+				t.Fatalf("%v = %v", tc.name, err)
+			}
+			<-cmds
+			select {
+			case cmd := <-cmds:
+				t.Fatalf("sent %q, want nothing after %v", cmd, tc.name)
+			default:
 			}
 			if !client.Caps().Has(imap.CapMove) {
 				t.Errorf("Caps() = %v, want MOVE", client.Caps())

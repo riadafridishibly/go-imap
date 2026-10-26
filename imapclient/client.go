@@ -819,11 +819,10 @@ func (c *Client) readResponseTagged(tag, typ string) (startTLS *startTLSCommand,
 		return nil, fmt.Errorf("in resp-cond-state: expected OK, NO or BAD status condition, but got %v", typ)
 	}
 
-	// Before completeCommand, so that Wait doesn't see the old capabilities
+	// These commands invalidate the capabilities. Reset them before
+	// completeCommand, so that Wait doesn't see the old ones.
 	if cmdErr == nil && code != "CAPABILITY" {
-		switch cmd.(type) {
-		case *startTLSCommand, *loginCommand, *authenticateCommand, *unauthenticateCommand:
-			// These commands invalidate the capabilities
+		if _, ok := cmd.(*startTLSCommand); ok || (isAuthCommand(cmd) && !cmd.base().capsRecv) {
 			c.setCaps(nil)
 		}
 	}
@@ -1259,6 +1258,7 @@ type commandBase struct {
 	done      chan error
 	err       error
 	completed bool // protected by Client.mutex
+	capsRecv  bool // untagged CAPABILITY in the reply; read goroutine only
 }
 
 func (cmd *commandBase) base() *commandBase {
