@@ -46,6 +46,8 @@ upstream:
 - `SearchCriteria.And` keeps `Smaller` when the other criteria have none.
 - After a `SELECT` or `EXAMINE` fails with `NO`, `State` is authenticated and
   `Mailbox` is nil, since the server has deselected the mailbox.
+- `State` and `Mailbox` are current when a command's `Wait` returns (upstream
+  can return before updating them).
 
 ### Differences that can break upstream code
 
@@ -63,13 +65,16 @@ upstream:
   commands at once, deletes the messages even if COPY fails, and uses plain
   `EXPUNGE`):
   - Requires UIDPLUS. Without it, returns an error and sends nothing.
-  - Refuses a read-only mailbox before sending anything.
+  - Refuses before sending anything if the mailbox is read-only, or if
+    `PERMANENTFLAGS` lists neither `\Deleted` nor `\*`.
   - Sends each command after the previous one succeeds, and blocks. Don't call
     it while another command's responses are being consumed.
-  - Removes only the messages listed in COPY's `COPYUID`. Without `COPYUID`,
-    they are copied and left in place.
-  - Stops after COPY if a `SELECT` or `EXAMINE` is sent before STORE or
-    EXPUNGE, for example from another goroutine.
+  - Removes only the messages listed in COPY's `COPYUID`. Without it, sends
+    `UID SEARCH`: if none of the messages exist, it succeeds as MOVE does;
+    otherwise the copies are left in place and it returns an error.
+  - Stops after COPY if the selected mailbox changes (`SELECT`, `EXAMINE`,
+    `CLOSE`, `UNSELECT`) before a later step, for example from another
+    goroutine.
   - If it fails after COPY, `MoveCommand.Wait` returns the `MoveData` along
     with the error (upstream: nil), so `DestUIDs` locates the copies.
 

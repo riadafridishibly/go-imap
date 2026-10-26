@@ -1,7 +1,9 @@
 package imapclient
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/internal/imapwire"
@@ -41,23 +43,29 @@ func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox stri
 		return fmt.Errorf("imapclient: server has advertised neither MOVE nor UIDPLUS")
 	}
 
-	// c.mailbox is stale until every SELECT sent so far is done
+	// c.mailbox is stale until every SELECT, CLOSE, etc. sent so far is done
 	c.mutex.Lock()
-	for c.selectsDone != c.selectsSent {
-		c.selectsCond.Wait()
+	for c.mboxCmdsDone != c.mboxCmdsSent {
+		c.mboxCmdsCond.Wait()
 	}
 	c.mutex.Unlock()
 
-	var selects uint64
+	var mboxCmds uint64
 	copyCmd, err := c.copyIf(numSet, mailbox, func() error {
-		if c.selectsDone != c.selectsSent {
-			return fmt.Errorf("imapclient: a SELECT was sent during Move")
+		if c.mboxCmdsDone != c.mboxCmdsSent {
+			return fmt.Errorf("imapclient: the selected mailbox changed during Move")
 		}
-		// COPY would succeed, then STORE would fail
-		if c.mailbox != nil && c.mailbox.ReadOnly {
-			return fmt.Errorf("imapclient: mailbox %q is read-only", c.mailbox.Name)
+		// COPY would succeed, then STORE would fail or be ignored
+		if mbox := c.mailbox; mbox != nil {
+			if mbox.ReadOnly {
+				return fmt.Errorf("imapclient: mailbox %q is read-only", mbox.Name)
+			}
+			// Some servers list only \*
+			if flags := mbox.PermanentFlags; flags != nil && !slices.Contains(flags, imap.FlagDeleted) && !slices.Contains(flags, imap.FlagWildcard) {
+				return fmt.Errorf("imapclient: mailbox %q doesn't allow \\Deleted", mbox.Name)
+			}
 		}
-		selects = c.selectsSent
+		mboxCmds = c.mboxCmdsSent
 		return nil
 	})
 	if err != nil {
@@ -68,23 +76,34 @@ func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox stri
 		return err
 	}
 	cmd.copied = true
+
+	// The other commands must run in the mailbox COPY ran in
+	sameMailbox := func() error {
+		if c.mboxCmdsSent != mboxCmds {
+			return fmt.Errorf("imapclient: the selected mailbox changed after COPY")
+		}
+		return nil
+	}
+
 	// COPYUID lists what was copied, even if sequence numbers shifted or
 	// messages were added to a range after COPY
 	if len(copyData.SourceUIDs) == 0 {
-		return fmt.Errorf("imapclient: COPY succeeded without COPYUID; not removing messages from the source mailbox")
+		// COPYUID can't be empty, so servers leave it out if nothing matched.
+		// Copied messages are still in the source mailbox.
+		found, err := c.anyMessages(numSet, sameMailbox)
+		if err == nil && !found {
+			return nil
+		}
+		msg := "imapclient: COPY succeeded without COPYUID; not removing messages from the source mailbox"
+		if err != nil {
+			return fmt.Errorf("%s: %w", msg, err)
+		}
+		return errors.New(msg)
 	}
 	cmd.data.UIDValidity = copyData.UIDValidity
 	cmd.data.SourceUIDs = copyData.SourceUIDs
 	cmd.data.DestUIDs = copyData.DestUIDs
 	uids := copyData.SourceUIDs
-
-	// STORE and EXPUNGE must run in the mailbox COPY ran in
-	sameMailbox := func() error {
-		if c.selectsSent != selects {
-			return fmt.Errorf("imapclient: another mailbox was selected after COPY")
-		}
-		return nil
-	}
 
 	storeCmd, err := c.storeIf(uids, &imap.StoreFlags{
 		Op:     imap.StoreFlagsAdd,
@@ -102,15 +121,38 @@ func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox stri
 	// as with MOVE
 	expungeCmd := &Command{}
 	enc, err := c.beginCommandIf("UID EXPUNGE", expungeCmd, sameMailbox)
-	if err == nil {
-		enc.SP().NumSet(uids)
-		enc.end()
-		err = expungeCmd.Wait()
-	}
 	if err != nil {
+		// A CLOSE may have expunged them
+		return fmt.Errorf("imapclient: messages copied and flagged \\Deleted; UID EXPUNGE not sent: %w", err)
+	}
+	enc.SP().NumSet(uids)
+	enc.end()
+	if err := expungeCmd.Wait(); err != nil {
 		return fmt.Errorf("imapclient: messages copied and flagged \\Deleted, but not expunged from the source mailbox: %w", err)
 	}
 	return nil
+}
+
+// anyMessages reports whether numSet matches a message, with a UID SEARCH
+// sent only if check succeeds.
+func (c *Client) anyMessages(numSet imap.NumSet, check func() error) (bool, error) {
+	var criteria imap.SearchCriteria
+	switch numSet := numSet.(type) {
+	case imap.UIDSet:
+		criteria.UID = []imap.UIDSet{numSet}
+	case imap.SeqSet:
+		criteria.SeqNum = []imap.SeqSet{numSet}
+	}
+	cmd, err := c.searchIf(imapwire.NumKindUID, &criteria, nil, check)
+	if err != nil {
+		return false, err
+	}
+	data, err := cmd.Wait()
+	if err != nil {
+		return false, err
+	}
+	uids, _ := data.All.(imap.UIDSet)
+	return len(uids) > 0, nil
 }
 
 // MoveCommand is a MOVE command.
@@ -122,9 +164,9 @@ type MoveCommand struct {
 
 // Wait blocks until the command has completed.
 //
-// If the fallback fails after COPY, the messages are left in both mailboxes,
-// and the MoveData is returned along with the error. Otherwise, the MoveData
-// is nil on error.
+// If the fallback fails after COPY, the messages may be left in both
+// mailboxes, and the MoveData is returned along with the error. Otherwise, the
+// MoveData is nil on error.
 func (cmd *MoveCommand) Wait() (*MoveData, error) {
 	err := cmd.wait()
 	if err != nil && !cmd.copied {

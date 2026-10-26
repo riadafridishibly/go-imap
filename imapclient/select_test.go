@@ -61,3 +61,26 @@ func TestSelect_failed(t *testing.T) {
 		})
 	}
 }
+
+// State and Mailbox are current when Wait returns.
+func TestSelect_stateOnWait(t *testing.T) {
+	const n = 5000
+	resps := make([]string, n)
+	for i := range resps {
+		resps[i] = "TAG OK [READ-ONLY] done"
+		if i%2 == 1 {
+			resps[i] = "TAG NO [NONEXISTENT] no such mailbox"
+		}
+	}
+	client, _ := newRawServerClientCaps(t, "IMAP4rev1", resps...)
+	for i := range n {
+		client.Select("INBOX", &imap.SelectOptions{ReadOnly: i%2 == 0}).Wait()
+		want := imap.ConnStateSelected
+		if i%2 == 1 {
+			want = imap.ConnStateAuthenticated
+		}
+		if state := client.State(); state != want {
+			t.Fatalf("SELECT %v: State() = %v, want %v", i, state, want)
+		}
+	}
+}

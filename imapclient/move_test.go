@@ -36,6 +36,14 @@ func TestMove(t *testing.T) {
 			wantDest: "20:21",
 		},
 		{
+			// Some servers send "*" (#749)
+			name:   "MOVE with a dynamic COPYUID",
+			caps:   "IMAP4rev1 MOVE UIDPLUS",
+			numSet: uids,
+			resps:  []string{"* OK [COPYUID 7 1:* 100:*] moved"},
+			want:   []string{`UID MOVE 10:11 "dest"`},
+		},
+		{
 			name:     "IMAP4rev2",
 			caps:     "IMAP4rev2",
 			numSet:   uids,
@@ -80,8 +88,8 @@ func TestMove(t *testing.T) {
 			name:    "fallback with a dynamic set and a dynamic COPYUID",
 			caps:    "IMAP4rev1 UIDPLUS",
 			numSet:  dynamic,
-			resps:   []string{"TAG OK [COPYUID 7 1:* 100:*] done"},
-			want:    []string{`UID COPY 1:* "dest"`},
+			resps:   []string{"TAG OK [COPYUID 7 1:* 100:*] done", "* SEARCH 1 2"},
+			want:    []string{`UID COPY 1:* "dest"`, "UID SEARCH UID 1:*"},
 			wantErr: "without COPYUID",
 		},
 		{
@@ -89,8 +97,32 @@ func TestMove(t *testing.T) {
 			name:    "fallback, COPY without COPYUID",
 			caps:    "IMAP4rev1 UIDPLUS",
 			numSet:  uids,
-			resps:   []string{""},
-			want:    []string{`UID COPY 10:11 "dest"`},
+			resps:   []string{"", "* SEARCH 10"},
+			want:    []string{`UID COPY 10:11 "dest"`, "UID SEARCH UID 10:11"},
+			wantErr: "without COPYUID",
+		},
+		{
+			name:    "fallback with sequence numbers, COPY without COPYUID",
+			caps:    "IMAP4rev1 UIDPLUS",
+			numSet:  imap.SeqSetNum(1, 2),
+			resps:   []string{"", "* SEARCH 10"},
+			want:    []string{`COPY 1:2 "dest"`, "UID SEARCH 1:2"},
+			wantErr: "without COPYUID",
+		},
+		{
+			// COPYUID can't be empty, so servers leave it out
+			name:   "fallback, no message matched",
+			caps:   "IMAP4rev1 UIDPLUS",
+			numSet: uids,
+			resps:  []string{"TAG OK No messages found", "* SEARCH"},
+			want:   []string{`UID COPY 10:11 "dest"`, "UID SEARCH UID 10:11"},
+		},
+		{
+			name:    "fallback, COPY without COPYUID and SEARCH fails",
+			caps:    "IMAP4rev1 UIDPLUS",
+			numSet:  uids,
+			resps:   []string{"", "TAG NO search failed"},
+			want:    []string{`UID COPY 10:11 "dest"`, "UID SEARCH UID 10:11"},
 			wantErr: "without COPYUID",
 		},
 		{
@@ -168,7 +200,7 @@ func TestMove(t *testing.T) {
 			if (data == nil) != tc.nilData {
 				t.Errorf("Move() MoveData = %v, want nil: %v", data, tc.nilData)
 			} else if data != nil {
-				if dest := data.DestUIDs; (dest == nil && tc.wantDest != "") || (dest != nil && dest.String() != tc.wantDest) {
+				if dest := data.DestUIDs; (dest == nil) != (tc.wantDest == "") || (dest != nil && dest.String() != tc.wantDest) {
 					t.Errorf("Move() DestUIDs = %v, want %q", dest, tc.wantDest)
 				}
 			}
@@ -240,25 +272,101 @@ func TestMove_readOnly(t *testing.T) {
 	})
 }
 
-// STORE and EXPUNGE are not sent once another mailbox may be selected.
-func TestMove_selectAfterCopy(t *testing.T) {
-	var client *imapclient.Client
-	options := &imapclient.Options{
-		UnilateralDataHandler: &imapclient.UnilateralDataHandler{
-			Mailbox: func(*imapclient.UnilateralDataMailbox) {
-				client.Select("other", nil)
-			},
+// The fallback needs \Deleted to be kept, or the server may ignore STORE.
+func TestMove_permanentFlags(t *testing.T) {
+	moved := []string{"SELECT INBOX", `UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 10:11"}
+	tests := []struct {
+		flags   string
+		want    []string
+		wantErr bool
+	}{
+		{`\Seen`, []string{"SELECT INBOX"}, true},
+		{`\Seen \Deleted`, moved, false},
+		{`\*`, moved, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.flags, func(t *testing.T) {
+			// Spare replies let unexpected commands through to the diff
+			client, cmds := newRawServerClientCaps(t, "IMAP4rev1 UIDPLUS",
+				"* OK [PERMANENTFLAGS ("+tc.flags+")] flags\r\nTAG OK [READ-WRITE] done",
+				"TAG OK [COPYUID 7 10:11 20:21] done", "", "", "", "")
+			if _, err := client.Select("INBOX", nil).Wait(); err != nil {
+				t.Fatalf("Select() = %v", err)
+			}
+			_, err := client.Move(imap.UIDSetNum(10, 11), "dest").Wait()
+			if tc.wantErr && (err == nil || !strings.Contains(err.Error(), `doesn't allow \Deleted`)) {
+				t.Errorf("Move() = %v, want an error about \\Deleted", err)
+			} else if !tc.wantErr && err != nil {
+				t.Errorf("Move() = %v", err)
+			}
+			if got := sentUntilNoop(t, client, cmds); !slices.Equal(got, tc.want) {
+				t.Errorf("sent %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// STORE and EXPUNGE are not sent once the selected mailbox may have changed.
+func TestMove_mailboxChanged(t *testing.T) {
+	copyOK := "TAG OK [COPYUID 7 10:11 20:21] done"
+	tests := []struct {
+		name    string
+		send    func(*imapclient.Client) // called on EXISTS
+		resps   []string
+		want    []string
+		wantErr string
+	}{
+		{
+			name:    "SELECT after COPY",
+			send:    func(c *imapclient.Client) { c.Select("other", nil) },
+			resps:   []string{"* 3 EXISTS\r\n" + copyOK},
+			want:    []string{`UID COPY 10:11 "dest"`, `SELECT "other"`},
+			wantErr: "not flagged",
+		},
+		{
+			name:    "SELECT after COPY without COPYUID",
+			send:    func(c *imapclient.Client) { c.Select("other", nil) },
+			resps:   []string{"* 3 EXISTS"},
+			want:    []string{`UID COPY 10:11 "dest"`, `SELECT "other"`},
+			wantErr: "without COPYUID",
+		},
+		{
+			name:    "UNSELECT after COPY",
+			send:    func(c *imapclient.Client) { c.Unselect() },
+			resps:   []string{"* 3 EXISTS\r\n" + copyOK},
+			want:    []string{`UID COPY 10:11 "dest"`, "UNSELECT"},
+			wantErr: "not flagged",
+		},
+		{
+			// CLOSE expunges the messages, so Move can't say they weren't
+			name:    "CLOSE after STORE",
+			send:    func(c *imapclient.Client) { c.UnselectAndExpunge() },
+			resps:   []string{copyOK, "* 3 EXISTS"},
+			want:    []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "CLOSE"},
+			wantErr: "UID EXPUNGE not sent",
 		},
 	}
-	// The EXISTS sent with COPY's reply makes the handler send SELECT
-	client, cmds := newRawServerClientOptions(t, "IMAP4rev1 UIDPLUS", options,
-		"* 3 EXISTS\r\nTAG OK [COPYUID 7 10:11 20:21] done", "", "", "", "")
-	_, err := client.Move(imap.UIDSetNum(10, 11), "dest").Wait()
-	if err == nil || !strings.Contains(err.Error(), "another mailbox was selected") {
-		t.Errorf("Move() = %v, want an error about the selected mailbox", err)
-	}
-	if got, want := sentUntilNoop(t, client, cmds), []string{`UID COPY 10:11 "dest"`, `SELECT "other"`}; !slices.Equal(got, want) {
-		t.Errorf("sent %q, want %q", got, want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var client *imapclient.Client
+			options := &imapclient.Options{
+				UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+					Mailbox: func(*imapclient.UnilateralDataMailbox) {
+						tc.send(client)
+					},
+				},
+			}
+			// Spare replies let unexpected commands through to the diff
+			resps := append(slices.Clone(tc.resps), "", "", "", "")
+			client, cmds := newRawServerClientOptions(t, "IMAP4rev1 UIDPLUS", options, resps...)
+			_, err := client.Move(imap.UIDSetNum(10, 11), "dest").Wait()
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "selected mailbox changed after COPY") {
+				t.Errorf("Move() = %v, want an error containing %q about the selected mailbox", err, tc.wantErr)
+			}
+			if got := sentUntilNoop(t, client, cmds); !slices.Equal(got, tc.want) {
+				t.Errorf("sent %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
