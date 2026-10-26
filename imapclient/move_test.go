@@ -114,8 +114,7 @@ func TestMove(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// A NOOP marks the end of what Move sent; spare replies let
-			// unexpected commands through so they show up in the diff
+			// Spare replies let unexpected commands through to the diff
 			resps := append(slices.Clone(tc.resps), make([]string, max(0, len(tc.want)+4-len(tc.resps)))...)
 			client, cmds := newRawServerClientCaps(t, tc.caps, resps...)
 

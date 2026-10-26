@@ -14,9 +14,8 @@ import (
 
 // newRawServerClient returns a client connected to a server that answers the
 // nth command with the lines in resps[n], if any, followed by a tagged OK.
-// If the last line of resps[n] starts with "TAG ", it replaces the tagged OK,
-// with TAG set to the command's tag. Each command, without its tag, is sent on
-// the returned channel.
+// A last line starting with "TAG " replaces the tagged OK. Each command,
+// without its tag, is sent on the returned channel.
 func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-chan string) {
 	return newRawServerClientCaps(t, "IMAP4rev1 X-GM-EXT-1", resps...)
 }
