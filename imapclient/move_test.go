@@ -10,6 +10,8 @@ import (
 
 func TestMove(t *testing.T) {
 	uids := imap.UIDSetNum(10, 11)
+	var dynamic imap.UIDSet
+	dynamic.AddRange(1, 0) // "1:*"
 	copyOK := "TAG OK [COPYUID 7 10:11 20:21] done"
 	tests := []struct {
 		name     string
@@ -52,6 +54,31 @@ func TestMove(t *testing.T) {
 			wantDest: "20:21",
 		},
 		{
+			name:     "fallback with a dynamic set",
+			caps:     "IMAP4rev1 UIDPLUS",
+			numSet:   dynamic,
+			resps:    []string{"TAG OK [COPYUID 7 1:40 100:139] done", "", "* 1 EXPUNGE"},
+			want:     []string{`UID COPY 1:* "dest"`, `UID STORE 1:40 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 1:40"},
+			wantDest: "100:139",
+		},
+		{
+			// Some servers send a dynamic COPYUID after MOVE (#749)
+			name:    "fallback with a dynamic set and a dynamic COPYUID",
+			caps:    "IMAP4rev1 UIDPLUS",
+			numSet:  dynamic,
+			resps:   []string{"TAG OK [COPYUID 7 1:* 100:*] done"},
+			want:    []string{`UID COPY 1:* "dest"`},
+			wantErr: "didn't report their UIDs",
+		},
+		{
+			name:    "fallback, SEARCH finds nothing",
+			caps:    "IMAP4rev1 UIDPLUS",
+			numSet:  imap.SeqSetNum(1, 2),
+			resps:   []string{"* SEARCH"},
+			want:    []string{"UID SEARCH 1:2"},
+			wantErr: "no message matches",
+		},
+		{
 			name:    "fallback, COPY fails",
 			caps:    "IMAP4rev1 UIDPLUS",
 			numSet:  uids,
@@ -60,20 +87,22 @@ func TestMove(t *testing.T) {
 			wantErr: "NO [TRYCREATE]",
 		},
 		{
-			name:    "fallback, STORE fails",
-			caps:    "IMAP4rev1 UIDPLUS",
-			numSet:  uids,
-			resps:   []string{copyOK, "TAG NO [READ-ONLY] mailbox is read-only"},
-			want:    []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`},
-			wantErr: "messages copied, but not flagged",
+			name:     "fallback, STORE fails",
+			caps:     "IMAP4rev1 UIDPLUS",
+			numSet:   uids,
+			resps:    []string{copyOK, "TAG NO [READ-ONLY] mailbox is read-only"},
+			want:     []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`},
+			wantErr:  "messages copied, but not flagged",
+			wantDest: "20:21",
 		},
 		{
-			name:    "fallback, UID EXPUNGE fails",
-			caps:    "IMAP4rev1 UIDPLUS",
-			numSet:  uids,
-			resps:   []string{copyOK, "", "TAG NO expunge failed"},
-			want:    []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 10:11"},
-			wantErr: "not expunged",
+			name:     "fallback, UID EXPUNGE fails",
+			caps:     "IMAP4rev1 UIDPLUS",
+			numSet:   uids,
+			resps:    []string{copyOK, "", "TAG NO expunge failed"},
+			want:     []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 10:11"},
+			wantErr:  "not expunged",
+			wantDest: "20:21",
 		},
 		{
 			// Plain EXPUNGE would remove other \Deleted messages
@@ -87,7 +116,7 @@ func TestMove(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// A NOOP marks the end of what Move sent; spare replies let
 			// unexpected commands through so they show up in the diff
-			resps := append(slices.Clone(tc.resps), make([]string, len(tc.want)+4-len(tc.resps))...)
+			resps := append(slices.Clone(tc.resps), make([]string, max(0, len(tc.want)+4-len(tc.resps)))...)
 			client, cmds := newRawServerClientCaps(t, tc.caps, resps...)
 
 			data, err := client.Move(tc.numSet, "dest").Wait()
@@ -97,7 +126,8 @@ func TestMove(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Errorf("Move() = %v", err)
-			} else if dest := data.DestUIDs; (dest == nil && tc.wantDest != "") || (dest != nil && dest.String() != tc.wantDest) {
+			}
+			if dest := data.DestUIDs; (dest == nil && tc.wantDest != "") || (dest != nil && dest.String() != tc.wantDest) {
 				t.Errorf("Move() DestUIDs = %v, want %q", dest, tc.wantDest)
 			}
 

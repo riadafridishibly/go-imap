@@ -10,12 +10,9 @@ import (
 // Move sends a MOVE command.
 //
 // If the server doesn't support IMAP4rev2 nor the MOVE extension, Move falls
-// back to UID COPY, UID STORE +FLAGS.SILENT \Deleted and UID EXPUNGE, and
-// blocks until they complete. Each command is sent after the previous one
-// succeeds, so messages are only removed from the source mailbox once they
-// have been copied. The fallback requires the UIDPLUS extension: without it,
-// an error is returned and no command is sent. A SeqSet is first converted to
-// UIDs with UID SEARCH.
+// back to UID COPY, UID STORE and UID EXPUNGE, each sent after the previous one
+// succeeds. The fallback requires UIDPLUS and blocks, so like Wait, don't call
+// it while another command's responses are being consumed.
 func (c *Client) Move(numSet imap.NumSet, mailbox string) *MoveCommand {
 	cmd := &MoveCommand{}
 	if !c.Caps().Has(imap.CapMove) {
@@ -45,9 +42,9 @@ func (c *Client) moveFallback(numSet imap.NumSet, mailbox string, data *MoveData
 		if err != nil {
 			return err
 		}
-		uids, _ = searchData.All.(imap.UIDSet)
-		if len(uids) == 0 {
-			return nil
+		uids, ok = searchData.All.(imap.UIDSet)
+		if !ok || len(uids) == 0 {
+			return fmt.Errorf("imapclient: no message matches %v in the source mailbox", numSet)
 		}
 	}
 
@@ -55,9 +52,16 @@ func (c *Client) moveFallback(numSet imap.NumSet, mailbox string, data *MoveData
 	if err != nil {
 		return err
 	}
-	data.UIDValidity = copyData.UIDValidity
-	data.SourceUIDs = copyData.SourceUIDs
-	data.DestUIDs = copyData.DestUIDs
+	// A dynamic set also matches messages added after the COPY, so only remove
+	// what COPYUID reports
+	if len(copyData.SourceUIDs) > 0 {
+		data.UIDValidity = copyData.UIDValidity
+		data.SourceUIDs = copyData.SourceUIDs
+		data.DestUIDs = copyData.DestUIDs
+		uids = copyData.SourceUIDs
+	} else if uids.Dynamic() {
+		return fmt.Errorf("imapclient: messages copied, but the server didn't report their UIDs; not removing %v from the source mailbox", uids)
+	}
 
 	err = c.Store(uids, &imap.StoreFlags{
 		Op:     imap.StoreFlagsAdd,
@@ -81,10 +85,8 @@ type MoveCommand struct {
 }
 
 func (cmd *MoveCommand) Wait() (*MoveData, error) {
-	if err := cmd.wait(); err != nil {
-		return nil, err
-	}
-	return &cmd.data, nil
+	// A fallback that fails after COPY leaves copies at DestUIDs
+	return &cmd.data, cmd.wait()
 }
 
 // MoveData contains the data returned by a MOVE command.

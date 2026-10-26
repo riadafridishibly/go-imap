@@ -55,11 +55,17 @@ upstream:
   it, and the returned error wraps the mechanism's error and the server's
   response. Compare it with `errors.Is` or `errors.As`, not `==` or a type
   assertion.
-- On a server without MOVE, `Client.Move` sends each fallback command only
-  after the previous one succeeds, and blocks until they complete. It uses
-  `UID EXPUNGE`, so it requires UIDPLUS: without it, `Move` returns an error
-  and sends nothing. Upstream sends all three commands at once, deletes the
-  messages even if COPY fails, and uses plain `EXPUNGE` without UIDPLUS.
+- `Client.Move` on a server without MOVE (upstream sends all three fallback
+  commands at once, deletes the messages even if COPY fails, and uses plain
+  `EXPUNGE`):
+  - Requires UIDPLUS. Without it, returns an error and sends nothing.
+  - Sends each command after the previous one succeeds, and blocks. Don't call
+    it while another command's responses are being consumed.
+  - Expunges only the UIDs in `COPYUID`. A dynamic set like `1:*` without a
+    usable `COPYUID` is copied but not expunged.
+  - A `SeqSet` matching no message is an error.
+  - Expunges reach a pending `ExpungeCommand`, not
+    `UnilateralDataHandler.Expunge`.
 
 ## Usage
 
