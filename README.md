@@ -13,8 +13,9 @@ before using it in place of upstream.
 
 ## About this fork
 
-The fork is based on upstream `v2` at commit `c328f5e` (2026-09-09) and is
-maintained separately. It may not stay compatible with upstream:
+The fork is based on upstream `v2`, last synced at commit `dd8c632`
+(2026-10-22), and is maintained separately. It may not stay compatible with
+upstream:
 
 - The API and behavior can diverge. Changes here are not sent upstream, and
   upstream changes are not merged on a schedule.
@@ -71,7 +72,7 @@ generated from upstream and do not list the additions above:
 
 ## Contributing
 
-See [CONTRIBUTING.md] for contribution guidelines.
+Open issues and PRs on [riadafridishibly/go-imap], not upstream.
 
 ## License
 
@@ -82,4 +83,4 @@ MIT
 [v1 branch]: https://github.com/emersion/go-imap/tree/v1
 [Client docs]: https://pkg.go.dev/github.com/emersion/go-imap/v2/imapclient
 [Server docs]: https://pkg.go.dev/github.com/emersion/go-imap/v2/imapserver
-[CONTRIBUTING.md]: https://github.com/emersion/.github/blob/main/CONTRIBUTING.md
+[riadafridishibly/go-imap]: https://github.com/riadafridishibly/go-imap
