@@ -18,6 +18,14 @@ import (
 // wraps both the mechanism's error and the server's response, so check it with
 // errors.Is or errors.As.
 func (c *Client) Authenticate(saslClient sasl.Client) error {
+	if err := c.authenticate(saslClient); err != nil {
+		return err
+	}
+	c.refreshCaps()
+	return nil
+}
+
+func (c *Client) authenticate(saslClient sasl.Client) error {
 	mech, initialResp, err := saslClient.Start()
 	if err != nil {
 		return err
@@ -124,7 +132,7 @@ func (c *Client) writeSASLLine(cmd *authenticateCommand, s string) error {
 //
 // This command requires support for the UNAUTHENTICATE extension.
 func (c *Client) Unauthenticate() *Command {
-	cmd := &unauthenticateCommand{}
+	cmd := &unauthenticateCommand{Command{refreshCaps: c.refreshCaps}}
 	c.beginCommand("UNAUTHENTICATE", cmd).end()
 	return &cmd.Command
 }

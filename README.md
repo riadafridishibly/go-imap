@@ -38,6 +38,11 @@ upstream:
   envelope, and a multipart with no parts. Nesting is limited to 1000 levels,
   and `imapserver` can write a multipart with no parts.
 - FETCH, STATUS and SEARCH RETURN items are written in a fixed order.
+- `CAPABILITY` is sent at fixed points, not from a background goroutine:
+  - `Login(...).Wait()`, `Unauthenticate().Wait()`, `Authenticate` and
+    `NewStartTLS` request the new list before returning, if the server didn't
+    send it.
+  - After a greeting without capabilities, the first `Caps` call requests them.
 - `SearchCriteria.And` keeps `Smaller` when the other criteria have none.
 
 ### Differences that can break upstream code
