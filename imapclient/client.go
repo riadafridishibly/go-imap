@@ -1275,7 +1275,7 @@ func (cmd *commandBase) wait() error {
 // Command is a basic IMAP command.
 type Command struct {
 	commandBase
-	refreshCaps func() // called by Wait on success, if set
+	refreshCaps func() // called once by Wait on success, if set
 }
 
 // Wait blocks until the command has completed.
@@ -1283,6 +1283,7 @@ func (cmd *Command) Wait() error {
 	err := cmd.wait()
 	if err == nil && cmd.refreshCaps != nil {
 		cmd.refreshCaps()
+		cmd.refreshCaps = nil
 	}
 	return err
 }
