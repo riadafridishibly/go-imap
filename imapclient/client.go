@@ -161,6 +161,8 @@ type Client struct {
 	caps        imap.CapSet // nil if unknown
 	enabled     imap.CapSet
 	mailbox     *SelectedMailbox
+	selectsSent uint64 // SELECT and EXAMINE commands
+	selectsDone uint64 // ... whose result is in state and mailbox
 	cmdTag      uint64
 	pendingCmds []command
 	contReqs    []continuationRequest
@@ -316,7 +318,8 @@ func (c *Client) setState(state imap.ConnState) {
 // returned.
 //
 // Login, Unauthenticate (in Wait), Authenticate and NewStartTLS request the new
-// list if the server didn't send it.
+// list if the server didn't send it. Caps called while one is pending waits for
+// the new list.
 // Until the list is known, commands are encoded as if the server had none.
 func (c *Client) Caps() imap.CapSet {
 	caps, _ := c.waitCaps()
@@ -329,10 +332,13 @@ func (c *Client) waitCaps() (imap.CapSet, error) {
 		return nil, err
 	}
 
+	// A pending LOGIN is about to replace the list. CAPABILITY is answered
+	// after it.
+	authPending := c.findPendingCmdFunc(isAuthCommand) != nil
 	c.mutex.Lock()
 	caps := c.caps
 	c.mutex.Unlock()
-	if caps != nil {
+	if caps != nil && !authPending {
 		return caps, nil
 	}
 
@@ -427,9 +433,25 @@ func (c *Client) Close() error {
 //
 // The caller must call commandEncoder.end.
 func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
+	enc, _ := c.beginCommandIf(name, cmd, nil)
+	return enc
+}
+
+// beginCommandIf is beginCommand, but sends nothing and returns check's error
+// if it fails. check runs with the encoder locked and c.mutex held, so no
+// command is sent between check and this one.
+func (c *Client) beginCommandIf(name string, cmd command, check func() error) (*commandEncoder, error) {
 	c.encMutex.Lock() // unlocked by commandEncoder.end
 
 	c.mutex.Lock()
+
+	if check != nil {
+		if err := check(); err != nil {
+			c.mutex.Unlock()
+			c.encMutex.Unlock()
+			return nil, err
+		}
+	}
 
 	c.cmdTag++
 	tag := fmt.Sprintf("T%v", c.cmdTag)
@@ -441,6 +463,9 @@ func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
 	}
 
 	c.pendingCmds = append(c.pendingCmds, cmd)
+	if _, ok := cmd.(*SelectCommand); ok {
+		c.selectsSent++
+	}
 	quotedUTF8 := c.utf8Mode()
 	literalMinus := c.caps.Has(imap.CapLiteralMinus)
 	literalPlus := c.caps.Has(imap.CapLiteralPlus)
@@ -463,7 +488,7 @@ func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
 		cmd:     baseCmd,
 	}
 	enc.Atom(tag).SP().Atom(name)
-	return enc
+	return enc, nil
 }
 
 func (c *Client) deletePendingCmdByTag(tag string) command {
@@ -538,8 +563,9 @@ func (c *Client) completeCommand(cmd command, err error) {
 			c.mutex.Unlock()
 		}
 	case *SelectCommand:
+		c.mutex.Lock()
+		c.selectsDone++
 		if err == nil {
-			c.mutex.Lock()
 			c.state = imap.ConnStateSelected
 			c.mailbox = &SelectedMailbox{
 				Name:           cmd.mailbox,
@@ -548,8 +574,8 @@ func (c *Client) completeCommand(cmd command, err error) {
 				PermanentFlags: cmd.data.PermanentFlags,
 				ReadOnly:       cmd.data.ReadOnly,
 			}
-			c.mutex.Unlock()
 		}
+		c.mutex.Unlock()
 	case *unselectCommand:
 		if err == nil {
 			c.setState(imap.ConnStateAuthenticated)

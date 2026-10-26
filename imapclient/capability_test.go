@@ -237,3 +237,22 @@ func TestCaps_untaggedOrder(t *testing.T) {
 		t.Errorf("Capability() = %v, %v; want MOVE", caps, err)
 	}
 }
+
+// While LOGIN is pending, the cached list is about to change.
+func TestCaps_loginPending(t *testing.T) {
+	client, cmds := newRawServerClientCaps(t, "IMAP4rev1", "", "* CAPABILITY IMAP4rev1 MOVE")
+	client.Login("user", "pass")
+	if caps := client.Caps(); !caps.Has(imap.CapMove) {
+		t.Fatalf("Caps() = %v, want the list after LOGIN", caps)
+	}
+	for _, want := range []string{"LOGIN", "CAPABILITY"} {
+		select {
+		case cmd := <-cmds:
+			if !strings.HasPrefix(cmd, want) {
+				t.Errorf("sent %q, want %v", cmd, want)
+			}
+		default:
+			t.Fatalf("%v not sent", want)
+		}
+	}
+}

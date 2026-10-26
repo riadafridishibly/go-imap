@@ -23,6 +23,11 @@ func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-ch
 // newRawServerClientCaps is newRawServerClient with caps in the greeting, or
 // none if caps is empty.
 func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapclient.Client, <-chan string) {
+	return newRawServerClientOptions(t, caps, nil, resps...)
+}
+
+// newRawServerClientOptions is newRawServerClientCaps with client options.
+func newRawServerClientOptions(t *testing.T, caps string, options *imapclient.Options, resps ...string) (*imapclient.Client, <-chan string) {
 	clientConn, serverConn := net.Pipe()
 	cmds := make(chan string, len(resps))
 	go func() {
@@ -50,7 +55,7 @@ func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapcl
 			io.WriteString(serverConn, resp+status+"\r\n")
 		}
 	}()
-	client := imapclient.New(clientConn, nil)
+	client := imapclient.New(clientConn, options)
 	t.Cleanup(func() {
 		client.Close()
 		serverConn.Close()

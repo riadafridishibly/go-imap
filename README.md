@@ -43,6 +43,7 @@ upstream:
     `NewStartTLS` request the new list before returning, if the server didn't
     send it.
   - After a greeting without capabilities, the first `Caps` call requests them.
+  - `Caps` called while one of those commands is pending waits for the new list.
 - `SearchCriteria.And` keeps `Smaller` when the other criteria have none.
 
 ### Differences that can break upstream code
@@ -55,17 +56,19 @@ upstream:
   it, and the returned error wraps the mechanism's error and the server's
   response. Compare it with `errors.Is` or `errors.As`, not `==` or a type
   assertion.
+- `Client.Move` returns an error and sends nothing if the capabilities can't
+  be fetched (upstream falls back as if the server had no MOVE).
 - `Client.Move` on a server without MOVE (upstream sends all three fallback
   commands at once, deletes the messages even if COPY fails, and uses plain
   `EXPUNGE`):
   - Requires UIDPLUS. Without it, returns an error and sends nothing.
+  - Refuses a read-only mailbox before sending anything.
   - Sends each command after the previous one succeeds, and blocks. Don't call
     it while another command's responses are being consumed.
-  - Expunges only the UIDs in `COPYUID`. A dynamic set like `1:*` without a
-    usable `COPYUID` is copied but not expunged.
-  - A `SeqSet` matching no message is an error.
-  - Expunges reach a pending `ExpungeCommand`, not
-    `UnilateralDataHandler.Expunge`.
+  - Removes only the messages listed in COPY's `COPYUID`. Without `COPYUID`,
+    they are copied and left in place.
+  - Stops after COPY if a `SELECT` or `EXAMINE` is sent before STORE or
+    EXPUNGE, for example from another goroutine.
 
 ## Usage
 
