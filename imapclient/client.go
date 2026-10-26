@@ -156,16 +156,15 @@ type Client struct {
 	decCh  chan struct{}
 	decErr error
 
-	mutex        sync.Mutex
-	state        imap.ConnState
-	caps         imap.CapSet
-	enabled      imap.CapSet
-	pendingCapCh chan struct{}
-	mailbox      *SelectedMailbox
-	cmdTag       uint64
-	pendingCmds  []command
-	contReqs     []continuationRequest
-	closed       bool
+	mutex       sync.Mutex
+	state       imap.ConnState
+	caps        imap.CapSet // nil if unknown
+	enabled     imap.CapSet
+	mailbox     *SelectedMailbox
+	cmdTag      uint64
+	pendingCmds []command
+	contReqs    []continuationRequest
+	closed      bool
 }
 
 // New creates a new IMAP client.
@@ -217,6 +216,7 @@ func NewStartTLS(conn net.Conn, options *Options) (*Client, error) {
 		return nil, fmt.Errorf("imapclient: server sent PREAUTH on unencrypted connection")
 	}
 
+	client.refreshCaps()
 	return client, nil
 }
 
@@ -314,66 +314,56 @@ func (c *Client) setState(state imap.ConnState) {
 // When the server hasn't sent the capability list, this method will request it
 // and block until it's received. If the capabilities cannot be fetched, nil is
 // returned.
+//
+// Login, Unauthenticate (in Wait), Authenticate and NewStartTLS request the new
+// list if the server didn't send it.
+// Until the list is known, commands are encoded as if the server had none.
 func (c *Client) Caps() imap.CapSet {
+	caps, _ := c.waitCaps()
+	return caps
+}
+
+// waitCaps is Caps, but reports why the capabilities are unknown.
+func (c *Client) waitCaps() (imap.CapSet, error) {
 	if err := c.WaitGreeting(); err != nil {
-		return nil
+		return nil, err
 	}
 
 	c.mutex.Lock()
 	caps := c.caps
-	capCh := c.pendingCapCh
 	c.mutex.Unlock()
-
 	if caps != nil {
-		return caps
+		return caps, nil
 	}
 
-	if capCh == nil {
-		capCmd := c.Capability()
-		capCh := make(chan struct{})
-		go func() {
-			capCmd.Wait()
-			close(capCh)
-		}()
-		c.mutex.Lock()
-		c.pendingCapCh = capCh
-		c.mutex.Unlock()
-	}
-
+	cmd := c.Capability()
 	timer := time.NewTimer(respReadTimeout)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return nil
-	case <-capCh:
-		// ok
+		return nil, fmt.Errorf("imapclient: timed out waiting for CAPABILITY")
+	case err := <-cmd.done:
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	// TODO: this is racy if caps are reset before we get the reply
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	return c.caps
+	// c.caps may already be reset by a later command
+	if cmd.caps == nil {
+		return nil, fmt.Errorf("imapclient: no CAPABILITY response")
+	}
+	return cmd.caps, nil
 }
 
 func (c *Client) setCaps(caps imap.CapSet) {
-	// If the capabilities are being reset, request the updated capabilities
-	// from the server
-	var capCh chan struct{}
-	if caps == nil {
-		capCh = make(chan struct{})
-
-		// We need to send the CAPABILITY command in a separate goroutine:
-		// setCaps might be called with Client.encMutex locked
-		go func() {
-			c.Capability().Wait()
-			close(capCh)
-		}()
-	}
-
 	c.mutex.Lock()
 	c.caps = caps
-	c.pendingCapCh = capCh
 	c.mutex.Unlock()
+}
+
+// refreshCaps requests the capabilities if a command invalidated them. On
+// failure they stay unknown, and the next waitCaps tries again.
+func (c *Client) refreshCaps() {
+	c.waitCaps()
 }
 
 // utf8Mode reports whether strings and mailbox names are sent and received as
@@ -830,18 +820,18 @@ func (c *Client) readResponseTagged(tag, typ string) (startTLS *startTLSCommand,
 		return nil, fmt.Errorf("in resp-cond-state: expected OK, NO or BAD status condition, but got %v", typ)
 	}
 
+	// These commands invalidate the capabilities. Reset them before
+	// completeCommand, so that Wait doesn't see the old ones.
+	if cmdErr == nil && code != "CAPABILITY" {
+		if _, ok := cmd.(*startTLSCommand); ok || (isAuthCommand(cmd) && !cmd.base().capsRecv) {
+			c.setCaps(nil)
+		}
+	}
+
 	c.completeCommand(cmd, cmdErr)
 
 	if cmd, ok := cmd.(*startTLSCommand); ok && cmdErr == nil {
 		startTLS = cmd
-	}
-
-	if cmdErr == nil && code != "CAPABILITY" {
-		switch cmd.(type) {
-		case *startTLSCommand, *loginCommand, *authenticateCommand, *unauthenticateCommand:
-			// These commands invalidate the capabilities
-			c.setCaps(nil)
-		}
 	}
 
 	return startTLS, nil
@@ -980,9 +970,6 @@ func (c *Client) readResponseData(typ string) error {
 				}
 			}
 			c.greetingRecv = true
-			if c.greetingErr == nil && code != "CAPABILITY" {
-				c.setCaps(nil) // request initial capabilities
-			}
 			close(c.greetingCh)
 		}
 	case "ID":
@@ -1093,7 +1080,7 @@ func (c *Client) Logout() *Command {
 
 // Login sends a LOGIN command.
 func (c *Client) Login(username, password string) *Command {
-	cmd := &loginCommand{}
+	cmd := &loginCommand{Command{refreshCaps: c.refreshCaps}}
 	enc := c.beginCommand("LOGIN", cmd)
 	enc.SP().String(username).SP().String(password)
 	enc.end()
@@ -1272,6 +1259,7 @@ type commandBase struct {
 	done      chan error
 	err       error
 	completed bool // protected by Client.mutex
+	capsRecv  bool // untagged CAPABILITY in the reply; read goroutine only
 }
 
 func (cmd *commandBase) base() *commandBase {
@@ -1288,11 +1276,17 @@ func (cmd *commandBase) wait() error {
 // Command is a basic IMAP command.
 type Command struct {
 	commandBase
+	refreshCaps func() // called once by Wait on success, if set
 }
 
 // Wait blocks until the command has completed.
 func (cmd *Command) Wait() error {
-	return cmd.wait()
+	err := cmd.wait()
+	if err == nil && cmd.refreshCaps != nil {
+		cmd.refreshCaps()
+		cmd.refreshCaps = nil
+	}
+	return err
 }
 
 type loginCommand struct {

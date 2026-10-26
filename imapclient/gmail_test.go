@@ -19,15 +19,18 @@ func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-ch
 	return newRawServerClientCaps(t, "IMAP4rev1 X-GM-EXT-1", resps...)
 }
 
-// newRawServerClientCaps is newRawServerClient with caps in the greeting.
+// newRawServerClientCaps is newRawServerClient with caps in the greeting, or
+// none if caps is empty.
 func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapclient.Client, <-chan string) {
 	clientConn, serverConn := net.Pipe()
 	cmds := make(chan string, len(resps))
 	go func() {
 		defer close(cmds)
-		// Without CAPABILITY in the greeting, the client sends its own
-		// CAPABILITY command, which would race with the test's commands
-		io.WriteString(serverConn, "* OK [CAPABILITY "+caps+"] ready\r\n")
+		greeting := "* OK ready\r\n"
+		if caps != "" {
+			greeting = "* OK [CAPABILITY " + caps + "] ready\r\n"
+		}
+		io.WriteString(serverConn, greeting)
 		br := bufio.NewReader(serverConn)
 		for _, resp := range resps {
 			line, err := br.ReadString('\n')
