@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,5 +185,55 @@ func TestCaps_resetDuringRequest(t *testing.T) {
 	}
 	if caps := client.Caps(); !caps.Has(imap.CapIdle) {
 		t.Errorf("Caps() after LOGIN = %v, want IDLE", caps)
+	}
+}
+
+// An untagged CAPABILITY goes to the first pending command, even when a
+// CAPABILITY command was sent after it.
+func TestCaps_untaggedOrder(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { serverConn.Close() })
+	var mutex sync.Mutex
+	write := func(s string) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		io.WriteString(serverConn, s)
+	}
+	bothRead := make(chan struct{})
+	extra := make(chan string, 4)
+	go func() {
+		write("* OK [CAPABILITY IMAP4rev1] ready\r\n")
+		br := bufio.NewReader(serverConn)
+		br.ReadString('\n') // T1 LOGIN
+		br.ReadString('\n') // T2 CAPABILITY
+		close(bothRead)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			extra <- line
+			tag, _, _ := strings.Cut(line, " ")
+			write(tag + " OK done\r\n")
+		}
+	}()
+	client := imapclient.New(clientConn, nil)
+	t.Cleanup(func() { client.Close() })
+
+	login := client.Login("user", "pass")
+	capCmd := client.Capability()
+	<-bothRead
+	write("* CAPABILITY IMAP4rev1 MOVE\r\nT1 OK done\r\n")
+	if err := login.Wait(); err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+	select {
+	case line := <-extra:
+		t.Errorf("sent %q after LOGIN", line)
+	default:
+	}
+	write("* CAPABILITY IMAP4rev1 MOVE\r\nT2 OK done\r\n")
+	if caps, err := capCmd.Wait(); err != nil || !caps.Has(imap.CapMove) {
+		t.Errorf("Capability() = %v, %v; want MOVE", caps, err)
 	}
 }
