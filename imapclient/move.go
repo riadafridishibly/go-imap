@@ -27,7 +27,7 @@ func (c *Client) Move(numSet imap.NumSet, mailbox string) *MoveCommand {
 	if err != nil {
 		err = fmt.Errorf("imapclient: capabilities unknown, not moving: %w", err)
 	} else {
-		err = c.moveFallback(caps, numSet, mailbox, &cmd.data)
+		err = c.moveFallback(caps, numSet, mailbox, cmd)
 	}
 	cmd.done = make(chan error, 1)
 	cmd.done <- err
@@ -35,17 +35,26 @@ func (c *Client) Move(numSet imap.NumSet, mailbox string) *MoveCommand {
 	return cmd
 }
 
-func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox string, data *MoveData) error {
+func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox string, cmd *MoveCommand) error {
 	// Plain EXPUNGE would also remove messages flagged \Deleted by others
 	if !caps.Has(imap.CapUIDPlus) {
 		return fmt.Errorf("imapclient: server has advertised neither MOVE nor UIDPLUS")
 	}
 
+	// c.mailbox is stale until every SELECT sent so far is done
+	c.mutex.Lock()
+	for c.selectsDone != c.selectsSent {
+		c.selectsCond.Wait()
+	}
+	c.mutex.Unlock()
+
 	var selects uint64
 	copyCmd, err := c.copyIf(numSet, mailbox, func() error {
-		// COPY would succeed, then STORE would fail. c.mailbox is stale while
-		// a SELECT is in flight.
-		if c.selectsDone == c.selectsSent && c.mailbox != nil && c.mailbox.ReadOnly {
+		if c.selectsDone != c.selectsSent {
+			return fmt.Errorf("imapclient: a SELECT was sent during Move")
+		}
+		// COPY would succeed, then STORE would fail
+		if c.mailbox != nil && c.mailbox.ReadOnly {
 			return fmt.Errorf("imapclient: mailbox %q is read-only", c.mailbox.Name)
 		}
 		selects = c.selectsSent
@@ -58,14 +67,15 @@ func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox stri
 	if err != nil {
 		return err
 	}
+	cmd.copied = true
 	// COPYUID lists what was copied, even if sequence numbers shifted or
 	// messages were added to a range after COPY
 	if len(copyData.SourceUIDs) == 0 {
 		return fmt.Errorf("imapclient: COPY succeeded without COPYUID; not removing messages from the source mailbox")
 	}
-	data.UIDValidity = copyData.UIDValidity
-	data.SourceUIDs = copyData.SourceUIDs
-	data.DestUIDs = copyData.DestUIDs
+	cmd.data.UIDValidity = copyData.UIDValidity
+	cmd.data.SourceUIDs = copyData.SourceUIDs
+	cmd.data.DestUIDs = copyData.DestUIDs
 	uids := copyData.SourceUIDs
 
 	// STORE and EXPUNGE must run in the mailbox COPY ran in
@@ -106,12 +116,21 @@ func (c *Client) moveFallback(caps imap.CapSet, numSet imap.NumSet, mailbox stri
 // MoveCommand is a MOVE command.
 type MoveCommand struct {
 	commandBase
-	data MoveData
+	data   MoveData
+	copied bool // the fallback's COPY succeeded
 }
 
+// Wait blocks until the command has completed.
+//
+// If the fallback fails after COPY, the messages are left in both mailboxes,
+// and the MoveData is returned along with the error. Otherwise, the MoveData
+// is nil on error.
 func (cmd *MoveCommand) Wait() (*MoveData, error) {
-	// A fallback that fails after COPY leaves copies at DestUIDs
-	return &cmd.data, cmd.wait()
+	err := cmd.wait()
+	if err != nil && !cmd.copied {
+		return nil, err
+	}
+	return &cmd.data, err
 }
 
 // MoveData contains the data returned by a MOVE command.

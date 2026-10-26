@@ -25,6 +25,7 @@ func TestMove(t *testing.T) {
 		want     []string // commands the server receives
 		wantErr  string
 		wantDest string // MoveData.DestUIDs
+		nilData  bool   // nothing was copied
 	}{
 		{
 			name:     "MOVE",
@@ -46,6 +47,14 @@ func TestMove(t *testing.T) {
 			caps:     "IMAP4rev1 UIDPLUS",
 			numSet:   uids,
 			resps:    []string{copyOK, "", "* 1 EXPUNGE\r\n* 1 EXPUNGE"},
+			want:     []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 10:11"},
+			wantDest: "20:21",
+		},
+		{
+			name:     "fallback with an untagged COPYUID",
+			caps:     "IMAP4rev1 UIDPLUS",
+			numSet:   uids,
+			resps:    []string{"* OK [COPYUID 7 10:11 20:21] copied", "", "* 1 EXPUNGE\r\n* 1 EXPUNGE"},
 			want:     []string{`UID COPY 10:11 "dest"`, `UID STORE 10:11 +FLAGS.SILENT (\Deleted)`, "UID EXPUNGE 10:11"},
 			wantDest: "20:21",
 		},
@@ -91,6 +100,7 @@ func TestMove(t *testing.T) {
 			resps:   []string{"TAG NO [TRYCREATE] No folder dest (Failure)"},
 			want:    []string{`UID COPY 10:11 "dest"`},
 			wantErr: "NO [TRYCREATE]",
+			nilData: true,
 		},
 		{
 			name:     "fallback, STORE fails",
@@ -116,6 +126,7 @@ func TestMove(t *testing.T) {
 			caps:    "IMAP4rev1",
 			numSet:  uids,
 			wantErr: "neither MOVE nor UIDPLUS",
+			nilData: true,
 		},
 		{
 			name:    "capabilities unknown",
@@ -123,6 +134,7 @@ func TestMove(t *testing.T) {
 			resps:   []string{"TAG BAD unknown command"},
 			want:    []string{"CAPABILITY"},
 			wantErr: "capabilities unknown",
+			nilData: true,
 		},
 	}
 	for _, tc := range tests {
@@ -153,21 +165,15 @@ func TestMove(t *testing.T) {
 			} else if err != nil {
 				t.Errorf("Move() = %v", err)
 			}
-			if dest := data.DestUIDs; (dest == nil && tc.wantDest != "") || (dest != nil && dest.String() != tc.wantDest) {
-				t.Errorf("Move() DestUIDs = %v, want %q", dest, tc.wantDest)
+			if (data == nil) != tc.nilData {
+				t.Errorf("Move() MoveData = %v, want nil: %v", data, tc.nilData)
+			} else if data != nil {
+				if dest := data.DestUIDs; (dest == nil && tc.wantDest != "") || (dest != nil && dest.String() != tc.wantDest) {
+					t.Errorf("Move() DestUIDs = %v, want %q", dest, tc.wantDest)
+				}
 			}
 
-			if err := client.Noop().Wait(); err != nil {
-				t.Fatalf("Noop() = %v", err)
-			}
-			var got []string
-			for cmd := range cmds {
-				if cmd == "NOOP" {
-					break
-				}
-				got = append(got, cmd)
-			}
-			if !slices.Equal(got, tc.want) {
+			if got := sentUntilNoop(t, client, cmds); !slices.Equal(got, tc.want) {
 				t.Errorf("sent %q, want %q", got, tc.want)
 			}
 		})
@@ -206,7 +212,18 @@ func TestMove_readOnly(t *testing.T) {
 			t.Errorf("sent %q, want %q", got, want)
 		}
 	})
-	// The read-only state may be stale while another SELECT is pending
+	// Move waits for a pending EXAMINE before checking
+	t.Run("EXAMINE pending", func(t *testing.T) {
+		client, cmds := newRawServerClientCaps(t, "IMAP4rev1 UIDPLUS", "TAG OK [READ-ONLY] done", "", "", "", "")
+		client.Select("INBOX", &imap.SelectOptions{ReadOnly: true})
+		if _, err := client.Move(imap.UIDSetNum(10, 11), "dest").Wait(); err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Errorf("Move() = %v, want a read-only error", err)
+		}
+		if got, want := sentUntilNoop(t, client, cmds), []string{"EXAMINE INBOX"}; !slices.Equal(got, want) {
+			t.Errorf("sent %q, want %q", got, want)
+		}
+	})
+	// A pending SELECT replaces the read-only mailbox
 	t.Run("SELECT pending", func(t *testing.T) {
 		client, cmds := newRawServerClientCaps(t, "IMAP4rev1 UIDPLUS", "TAG OK [READ-ONLY] done", "TAG OK [READ-WRITE] done", copyOK, "", "", "")
 		if _, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {

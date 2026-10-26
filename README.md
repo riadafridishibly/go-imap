@@ -43,8 +43,9 @@ upstream:
     `NewStartTLS` request the new list before returning, if the server didn't
     send it.
   - After a greeting without capabilities, the first `Caps` call requests them.
-  - `Caps` called while one of those commands is pending waits for the new list.
 - `SearchCriteria.And` keeps `Smaller` when the other criteria have none.
+- After a `SELECT` or `EXAMINE` fails with `NO`, `State` is authenticated and
+  `Mailbox` is nil, since the server has deselected the mailbox.
 
 ### Differences that can break upstream code
 
@@ -69,6 +70,8 @@ upstream:
     they are copied and left in place.
   - Stops after COPY if a `SELECT` or `EXAMINE` is sent before STORE or
     EXPUNGE, for example from another goroutine.
+  - If it fails after COPY, `MoveCommand.Wait` returns the `MoveData` along
+    with the error (upstream: nil), so `DestUIDs` locates the copies.
 
 ## Usage
 

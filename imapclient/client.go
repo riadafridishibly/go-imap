@@ -161,8 +161,9 @@ type Client struct {
 	caps        imap.CapSet // nil if unknown
 	enabled     imap.CapSet
 	mailbox     *SelectedMailbox
-	selectsSent uint64 // SELECT and EXAMINE commands
-	selectsDone uint64 // ... whose result is in state and mailbox
+	selectsSent uint64     // SELECT and EXAMINE commands
+	selectsDone uint64     // ... whose result is in state and mailbox
+	selectsCond *sync.Cond // broadcast when selectsDone changes
 	cmdTag      uint64
 	pendingCmds []command
 	contReqs    []continuationRequest
@@ -194,6 +195,7 @@ func New(conn net.Conn, options *Options) *Client {
 		state:      imap.ConnStateNone,
 		enabled:    make(imap.CapSet),
 	}
+	client.selectsCond = sync.NewCond(&client.mutex)
 	go client.read()
 	return client
 }
@@ -318,8 +320,7 @@ func (c *Client) setState(state imap.ConnState) {
 // returned.
 //
 // Login, Unauthenticate (in Wait), Authenticate and NewStartTLS request the new
-// list if the server didn't send it. Caps called while one is pending waits for
-// the new list.
+// list if the server didn't send it.
 // Until the list is known, commands are encoded as if the server had none.
 func (c *Client) Caps() imap.CapSet {
 	caps, _ := c.waitCaps()
@@ -332,13 +333,10 @@ func (c *Client) waitCaps() (imap.CapSet, error) {
 		return nil, err
 	}
 
-	// A pending LOGIN is about to replace the list. CAPABILITY is answered
-	// after it.
-	authPending := c.findPendingCmdFunc(isAuthCommand) != nil
 	c.mutex.Lock()
 	caps := c.caps
 	c.mutex.Unlock()
-	if caps != nil && !authPending {
+	if caps != nil {
 		return caps, nil
 	}
 
@@ -564,7 +562,7 @@ func (c *Client) completeCommand(cmd command, err error) {
 		}
 	case *SelectCommand:
 		c.mutex.Lock()
-		c.selectsDone++
+		var imapErr *imap.Error
 		if err == nil {
 			c.state = imap.ConnStateSelected
 			c.mailbox = &SelectedMailbox{
@@ -574,7 +572,13 @@ func (c *Client) completeCommand(cmd command, err error) {
 				PermanentFlags: cmd.data.PermanentFlags,
 				ReadOnly:       cmd.data.ReadOnly,
 			}
+		} else if errors.As(err, &imapErr) && imapErr.Type == imap.StatusResponseTypeNo && c.state == imap.ConnStateSelected {
+			// A failed SELECT deselects the mailbox (RFC 3501 section 6.3.1)
+			c.state = imap.ConnStateAuthenticated
+			c.mailbox = nil
 		}
+		c.selectsDone++
+		c.selectsCond.Broadcast()
 		c.mutex.Unlock()
 	case *unselectCommand:
 		if err == nil {
@@ -941,7 +945,21 @@ func (c *Client) readResponseData(typ string) error {
 				if err != nil {
 					return fmt.Errorf("in resp-code-copy: %w", err)
 				}
-				if cmd := findPendingCmdByType[*MoveCommand](c); cmd != nil {
+				// MOVE sends it untagged (RFC 6851), and so do some servers for
+				// COPY. Replies come in order, so it's for the oldest one.
+				cmd := c.findPendingCmdFunc(func(cmd command) bool {
+					switch cmd.(type) {
+					case *CopyCommand, *MoveCommand:
+						return true
+					}
+					return false
+				})
+				switch cmd := cmd.(type) {
+				case *CopyCommand:
+					cmd.data.UIDValidity = uidValidity
+					cmd.data.SourceUIDs = srcUIDs
+					cmd.data.DestUIDs = dstUIDs
+				case *MoveCommand:
 					cmd.data.UIDValidity = uidValidity
 					cmd.data.SourceUIDs = srcUIDs
 					cmd.data.DestUIDs = dstUIDs
