@@ -317,6 +317,7 @@ func (c *Client) setState(state imap.ConnState) {
 //
 // Login, Unauthenticate (in Wait), Authenticate and NewStartTLS request the new
 // list if the server didn't send it.
+// Until the list is known, commands are encoded as if the server had none.
 func (c *Client) Caps() imap.CapSet {
 	caps, _ := c.waitCaps()
 	return caps
