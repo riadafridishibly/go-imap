@@ -42,8 +42,12 @@ func (c *Client) handleExpunge(seqNum uint32) error {
 
 // ExpungeCommand is an EXPUNGE command.
 //
+// While pending, it receives every expunge the server reports, including ones
+// from earlier pipelined commands such as MOVE or NOOP, and from other
+// sessions. An earlier pending ExpungeCommand receives them first.
+//
 // The caller must fully consume the ExpungeCommand. A simple way to do so is
-// to defer a call to FetchCommand.Close.
+// to defer a call to ExpungeCommand.Close.
 type ExpungeCommand struct {
 	commandBase
 	seqNums chan uint32
