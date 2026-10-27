@@ -28,9 +28,13 @@ func (c *Client) handleExpunge(seqNum uint32) error {
 		c.mailbox = c.mailbox.copy()
 		c.mailbox.NumMessages--
 	}
+	// Replies come in order, so the expunge is for the oldest pending command
+	var cmd *ExpungeCommand
+	if len(c.pendingCmds) > 0 {
+		cmd, _ = c.pendingCmds[0].(*ExpungeCommand)
+	}
 	c.mutex.Unlock()
 
-	cmd := findPendingCmdByType[*ExpungeCommand](c)
 	if cmd != nil {
 		cmd.seqNums <- seqNum
 	} else if handler := c.options.unilateralDataHandler().Expunge; handler != nil {

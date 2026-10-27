@@ -51,6 +51,9 @@ upstream:
   `Mailbox` is nil, since the server has deselected the mailbox.
 - `State` and `Mailbox` are current when a command's `Wait` returns (upstream
   can return before updating them).
+- An `ExpungeCommand` gets only its own expunges. Expunges sent while an
+  earlier command is answered, such as MOVE or NOOP, go to
+  `UnilateralDataHandler.Expunge` (upstream gives them to the `ExpungeCommand`).
 
 ### Differences that can break upstream code
 
