@@ -456,6 +456,16 @@ func TestMove_fallbackServer(t *testing.T) {
 			if err != nil || status.NumMessages == nil || *status.NumMessages != 2 {
 				t.Errorf("Status(dest) = %v, %v; want 2 messages", status, err)
 			}
+
+			// UIDs 1 and 2 are gone, so nothing is moved, as with MOVE
+			if data, err := client.Move(imap.UIDSetNum(1, 2), "dest").Wait(); err != nil {
+				t.Errorf("Move() of moved UIDs = %v", err)
+			} else if data.SourceUIDs != nil {
+				t.Errorf("Move() of moved UIDs: SourceUIDs = %v, want nil", data.SourceUIDs)
+			}
+			if n := client.Mailbox().NumMessages; n != 1 {
+				t.Errorf("INBOX has %v messages after moving moved UIDs, want 1", n)
+			}
 		})
 	}
 }
