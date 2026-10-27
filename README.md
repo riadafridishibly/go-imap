@@ -37,8 +37,9 @@ upstream:
   `message/global` parts without the envelope, body and line count, a `NIL`
   envelope, and a multipart with no parts. Nesting is limited to 1000 levels,
   and `imapserver` can write a multipart with no parts.
-- `imapserver` leaves `COPYUID` out when COPY or MOVE matches no message
-  (upstream writes an invalid one, and the client drops the connection).
+- `imapserver` leaves `COPYUID` out when COPY or MOVE matches no message, or
+  the backend returns no destination UIDs (upstream writes an invalid one, and
+  the client drops the connection).
 - FETCH, STATUS and SEARCH RETURN items are written in a fixed order.
 - `CAPABILITY` is sent at fixed points, not from a background goroutine:
   - `Login(...).Wait()`, `Unauthenticate().Wait()`, `Authenticate` and

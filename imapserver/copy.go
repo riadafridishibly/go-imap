@@ -38,8 +38,9 @@ func (c *Conn) writeCopyOK(tag string, data *imap.CopyData) error {
 	}
 
 	enc.Atom(tag).SP().Atom("OK").SP()
-	// COPYUID can't be empty, so it's left out if nothing was copied
-	if data != nil && len(data.SourceUIDs) > 0 {
+	// COPYUID's sets can't be empty, so it's left out if nothing was copied or
+	// the destination UIDs are unknown
+	if data != nil && len(data.SourceUIDs) > 0 && len(data.DestUIDs) > 0 {
 		enc.Special('[')
 		enc.Atom("COPYUID").SP().Number(data.UIDValidity).SP().NumSet(data.SourceUIDs).SP().NumSet(data.DestUIDs)
 		enc.Special(']').SP()
