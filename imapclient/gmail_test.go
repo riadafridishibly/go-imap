@@ -14,7 +14,8 @@ import (
 
 // newRawServerClient returns a client connected to a server that answers the
 // nth command with the lines in resps[n], if any, followed by a tagged OK.
-// Each command, without its tag, is sent on the returned channel.
+// A last line starting with "TAG " replaces the tagged OK. Each command,
+// without its tag, is sent on the returned channel.
 func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-chan string) {
 	return newRawServerClientCaps(t, "IMAP4rev1 X-GM-EXT-1", resps...)
 }
@@ -22,6 +23,11 @@ func newRawServerClient(t *testing.T, resps ...string) (*imapclient.Client, <-ch
 // newRawServerClientCaps is newRawServerClient with caps in the greeting, or
 // none if caps is empty.
 func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapclient.Client, <-chan string) {
+	return newRawServerClientOptions(t, caps, nil, resps...)
+}
+
+// newRawServerClientOptions is newRawServerClientCaps with client options.
+func newRawServerClientOptions(t *testing.T, caps string, options *imapclient.Options, resps ...string) (*imapclient.Client, <-chan string) {
 	clientConn, serverConn := net.Pipe()
 	cmds := make(chan string, len(resps))
 	go func() {
@@ -39,13 +45,17 @@ func newRawServerClientCaps(t *testing.T, caps string, resps ...string) (*imapcl
 			}
 			tag, cmd, _ := strings.Cut(strings.TrimSuffix(line, "\r\n"), " ")
 			cmds <- cmd
+			status := tag + " OK done"
+			if i := strings.LastIndex(resp, "\n") + 1; strings.HasPrefix(resp[i:], "TAG ") {
+				resp, status = strings.TrimSuffix(resp[:i], "\r\n"), tag+resp[i+len("TAG"):]
+			}
 			if resp != "" {
 				resp += "\r\n"
 			}
-			io.WriteString(serverConn, resp+tag+" OK done\r\n")
+			io.WriteString(serverConn, resp+status+"\r\n")
 		}
 	}()
-	client := imapclient.New(clientConn, nil)
+	client := imapclient.New(clientConn, options)
 	t.Cleanup(func() {
 		client.Close()
 		serverConn.Close()

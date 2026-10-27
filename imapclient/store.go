@@ -14,12 +14,21 @@ import (
 //
 // A nil options pointer is equivalent to a zero options value.
 func (c *Client) Store(numSet imap.NumSet, store *imap.StoreFlags, options *imap.StoreOptions) *FetchCommand {
-	cmd, enc := c.beginStore(numSet, store.Op, "FLAGS", store.Silent, options)
+	cmd, _ := c.storeIf(numSet, store, options, nil)
+	return cmd
+}
+
+// storeIf is Store, sent only if check succeeds. See beginCommandIf.
+func (c *Client) storeIf(numSet imap.NumSet, store *imap.StoreFlags, options *imap.StoreOptions, check func() error) (*FetchCommand, error) {
+	cmd, enc, err := c.beginStore(numSet, store.Op, "FLAGS", store.Silent, options, check)
+	if err != nil {
+		return nil, err
+	}
 	enc.List(len(store.Flags), func(i int) {
 		enc.Flag(store.Flags[i])
 	})
 	enc.end()
-	return cmd
+	return cmd, nil
 }
 
 // StoreGmailLabels sends a STORE command for X-GM-LABELS.
@@ -41,7 +50,7 @@ func (c *Client) Store(numSet imap.NumSet, store *imap.StoreFlags, options *imap
 //
 // This requires the X-GM-EXT-1 extension.
 func (c *Client) StoreGmailLabels(numSet imap.NumSet, store *imap.StoreGmailLabels, options *imap.StoreOptions) *FetchCommand {
-	cmd, enc := c.beginStore(numSet, store.Op, "X-GM-LABELS", store.Silent, options)
+	cmd, enc, _ := c.beginStore(numSet, store.Op, "X-GM-LABELS", store.Silent, options, nil)
 	enc.List(len(store.Labels), func(i int) {
 		// Gmail takes modified UTF-7 names outside UTF-8 mode
 		label := store.Labels[i]
@@ -54,13 +63,16 @@ func (c *Client) StoreGmailLabels(numSet imap.NumSet, store *imap.StoreGmailLabe
 	return cmd
 }
 
-// beginStore writes a STORE command up to the value list.
-func (c *Client) beginStore(numSet imap.NumSet, op imap.StoreFlagsOp, item string, silent bool, options *imap.StoreOptions) (*FetchCommand, *commandEncoder) {
+// beginStore writes a STORE command up to the value list, if check succeeds.
+func (c *Client) beginStore(numSet imap.NumSet, op imap.StoreFlagsOp, item string, silent bool, options *imap.StoreOptions, check func() error) (*FetchCommand, *commandEncoder, error) {
 	cmd := &FetchCommand{
 		numSet: numSet,
 		msgs:   make(chan *FetchMessageData, 128),
 	}
-	enc := c.beginCommand(uidCmdName("STORE", imapwire.NumSetKind(numSet)), cmd)
+	enc, err := c.beginCommandIf(uidCmdName("STORE", imapwire.NumSetKind(numSet)), cmd, check)
+	if err != nil {
+		return nil, nil, err
+	}
 	enc.SP().NumSet(numSet).SP()
 	if options != nil && options.UnchangedSince != 0 {
 		enc.Special('(').Atom("UNCHANGEDSINCE").SP().ModSeq(options.UnchangedSince).Special(')').SP()
@@ -80,5 +92,5 @@ func (c *Client) beginStore(numSet imap.NumSet, op imap.StoreFlagsOp, item strin
 		enc.Atom(".SILENT")
 	}
 	enc.SP()
-	return cmd, enc
+	return cmd, enc, nil
 }

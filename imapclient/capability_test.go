@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -236,4 +237,27 @@ func TestCaps_untaggedOrder(t *testing.T) {
 	if caps, err := capCmd.Wait(); err != nil || !caps.Has(imap.CapMove) {
 		t.Errorf("Capability() = %v, %v; want MOVE", caps, err)
 	}
+}
+
+// A handler runs on the goroutine that reads replies, so Caps must not send
+// CAPABILITY when the list is cached, even while LOGIN is pending.
+func TestCaps_handlerDuringLogin(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var client *imapclient.Client
+		got := make(chan imap.CapSet, 1)
+		options := &imapclient.Options{
+			UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+				Mailbox: func(*imapclient.UnilateralDataMailbox) {
+					got <- client.Caps()
+				},
+			},
+		}
+		client, _ = newRawServerClientOptions(t, "IMAP4rev1 IDLE", options, "* 3 EXISTS", "* CAPABILITY IMAP4rev1 MOVE")
+		if err := client.Login("user", "pass").Wait(); err != nil {
+			t.Fatalf("Login() = %v", err)
+		}
+		if caps := <-got; !caps.Has(imap.CapIdle) {
+			t.Errorf("Caps() in handler = %v, want the cached list", caps)
+		}
+	})
 }

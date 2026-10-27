@@ -7,11 +7,20 @@ import (
 
 // Copy sends a COPY command.
 func (c *Client) Copy(numSet imap.NumSet, mailbox string) *CopyCommand {
+	cmd, _ := c.copyIf(numSet, mailbox, nil)
+	return cmd
+}
+
+// copyIf is Copy, sent only if check succeeds. See beginCommandIf.
+func (c *Client) copyIf(numSet imap.NumSet, mailbox string, check func() error) (*CopyCommand, error) {
 	cmd := &CopyCommand{}
-	enc := c.beginCommand(uidCmdName("COPY", imapwire.NumSetKind(numSet)), cmd)
+	enc, err := c.beginCommandIf(uidCmdName("COPY", imapwire.NumSetKind(numSet)), cmd, check)
+	if err != nil {
+		return nil, err
+	}
 	enc.SP().NumSet(numSet).SP().Mailbox(mailbox)
 	enc.end()
-	return cmd
+	return cmd, nil
 }
 
 // CopyCommand is a COPY command.

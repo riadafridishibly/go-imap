@@ -36,6 +36,12 @@ func returnSearchOptions(options *imap.SearchOptions) []string {
 }
 
 func (c *Client) search(numKind imapwire.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) *SearchCommand {
+	cmd, _ := c.searchIf(numKind, criteria, options, nil)
+	return cmd
+}
+
+// searchIf is search, sent only if check succeeds. See beginCommandIf.
+func (c *Client) searchIf(numKind imapwire.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions, check func() error) (*SearchCommand, error) {
 	var all imap.NumSet
 	switch numKind {
 	case imapwire.NumKindSeq:
@@ -46,7 +52,10 @@ func (c *Client) search(numKind imapwire.NumKind, criteria *imap.SearchCriteria,
 
 	cmd := &SearchCommand{}
 	cmd.data.All = all
-	enc := c.beginCommand(uidCmdName("SEARCH", numKind), cmd)
+	enc, err := c.beginCommandIf(uidCmdName("SEARCH", numKind), cmd, check)
+	if err != nil {
+		return nil, err
+	}
 	if returnOpts := returnSearchOptions(options); len(returnOpts) > 0 {
 		enc.SP().Atom("RETURN").SP().List(len(returnOpts), func(i int) {
 			enc.Atom(returnOpts[i])
@@ -67,7 +76,7 @@ func (c *Client) search(numKind imapwire.NumKind, criteria *imap.SearchCriteria,
 	}
 	writeSearchKey(enc.Encoder, criteria)
 	enc.end()
-	return cmd
+	return cmd, nil
 }
 
 // Search sends a SEARCH command.

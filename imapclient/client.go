@@ -156,15 +156,18 @@ type Client struct {
 	decCh  chan struct{}
 	decErr error
 
-	mutex       sync.Mutex
-	state       imap.ConnState
-	caps        imap.CapSet // nil if unknown
-	enabled     imap.CapSet
-	mailbox     *SelectedMailbox
-	cmdTag      uint64
-	pendingCmds []command
-	contReqs    []continuationRequest
-	closed      bool
+	mutex        sync.Mutex
+	state        imap.ConnState
+	caps         imap.CapSet // nil if unknown
+	enabled      imap.CapSet
+	mailbox      *SelectedMailbox
+	mboxCmdsSent uint64     // commands that can change the mailbox, see changesMailbox
+	mboxCmdsDone uint64     // ... whose result is in state and mailbox
+	mboxCmdsCond *sync.Cond // broadcast when mboxCmdsDone changes
+	cmdTag       uint64
+	pendingCmds  []command
+	contReqs     []continuationRequest
+	closed       bool
 }
 
 // New creates a new IMAP client.
@@ -192,6 +195,7 @@ func New(conn net.Conn, options *Options) *Client {
 		state:      imap.ConnStateNone,
 		enabled:    make(imap.CapSet),
 	}
+	client.mboxCmdsCond = sync.NewCond(&client.mutex)
 	go client.read()
 	return client
 }
@@ -427,9 +431,25 @@ func (c *Client) Close() error {
 //
 // The caller must call commandEncoder.end.
 func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
+	enc, _ := c.beginCommandIf(name, cmd, nil)
+	return enc
+}
+
+// beginCommandIf is beginCommand, but sends nothing and returns check's error
+// if it fails. check runs with the encoder locked and c.mutex held, so no
+// command is sent between check and this one.
+func (c *Client) beginCommandIf(name string, cmd command, check func() error) (*commandEncoder, error) {
 	c.encMutex.Lock() // unlocked by commandEncoder.end
 
 	c.mutex.Lock()
+
+	if check != nil {
+		if err := check(); err != nil {
+			c.mutex.Unlock()
+			c.encMutex.Unlock()
+			return nil, err
+		}
+	}
 
 	c.cmdTag++
 	tag := fmt.Sprintf("T%v", c.cmdTag)
@@ -441,6 +461,9 @@ func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
 	}
 
 	c.pendingCmds = append(c.pendingCmds, cmd)
+	if changesMailbox(cmd) {
+		c.mboxCmdsSent++
+	}
 	quotedUTF8 := c.utf8Mode()
 	literalMinus := c.caps.Has(imap.CapLiteralMinus)
 	literalPlus := c.caps.Has(imap.CapLiteralPlus)
@@ -463,7 +486,7 @@ func (c *Client) beginCommand(name string, cmd command) *commandEncoder {
 		cmd:     baseCmd,
 	}
 	enc.Atom(tag).SP().Atom(name)
-	return enc
+	return enc, nil
 }
 
 func (c *Client) deletePendingCmdByTag(tag string) command {
@@ -506,6 +529,54 @@ func findPendingCmdByType[T command](c *Client) T {
 }
 
 func (c *Client) completeCommand(cmd command, err error) {
+	// Before done, so that the state is current when Wait returns
+	switch cmd := cmd.(type) {
+	case *authenticateCommand, *loginCommand:
+		if err == nil {
+			c.setState(imap.ConnStateAuthenticated)
+		}
+	case *unauthenticateCommand:
+		if err == nil {
+			c.mutex.Lock()
+			c.state = imap.ConnStateNotAuthenticated
+			c.mailbox = nil
+			c.enabled = make(imap.CapSet)
+			c.mutex.Unlock()
+		}
+	case *SelectCommand:
+		c.mutex.Lock()
+		var imapErr *imap.Error
+		if err == nil {
+			c.state = imap.ConnStateSelected
+			c.mailbox = &SelectedMailbox{
+				Name:           cmd.mailbox,
+				NumMessages:    cmd.data.NumMessages,
+				Flags:          cmd.data.Flags,
+				PermanentFlags: cmd.data.PermanentFlags,
+				ReadOnly:       cmd.data.ReadOnly,
+			}
+		} else if errors.As(err, &imapErr) && imapErr.Type == imap.StatusResponseTypeNo && c.state == imap.ConnStateSelected {
+			// A failed SELECT deselects the mailbox (RFC 3501 section 6.3.1)
+			c.state = imap.ConnStateAuthenticated
+			c.mailbox = nil
+		}
+		c.mutex.Unlock()
+	case *unselectCommand:
+		if err == nil {
+			c.setState(imap.ConnStateAuthenticated)
+		}
+	case *logoutCommand:
+		if err == nil {
+			c.setState(imap.ConnStateLogout)
+		}
+	}
+	if changesMailbox(cmd) {
+		c.mutex.Lock()
+		c.mboxCmdsDone++
+		c.mboxCmdsCond.Broadcast()
+		c.mutex.Unlock()
+	}
+
 	done := cmd.base().done
 	done <- err
 	close(done)
@@ -525,39 +596,6 @@ func (c *Client) completeCommand(cmd command, err error) {
 	c.mutex.Unlock()
 
 	switch cmd := cmd.(type) {
-	case *authenticateCommand, *loginCommand:
-		if err == nil {
-			c.setState(imap.ConnStateAuthenticated)
-		}
-	case *unauthenticateCommand:
-		if err == nil {
-			c.mutex.Lock()
-			c.state = imap.ConnStateNotAuthenticated
-			c.mailbox = nil
-			c.enabled = make(imap.CapSet)
-			c.mutex.Unlock()
-		}
-	case *SelectCommand:
-		if err == nil {
-			c.mutex.Lock()
-			c.state = imap.ConnStateSelected
-			c.mailbox = &SelectedMailbox{
-				Name:           cmd.mailbox,
-				NumMessages:    cmd.data.NumMessages,
-				Flags:          cmd.data.Flags,
-				PermanentFlags: cmd.data.PermanentFlags,
-				ReadOnly:       cmd.data.ReadOnly,
-			}
-			c.mutex.Unlock()
-		}
-	case *unselectCommand:
-		if err == nil {
-			c.setState(imap.ConnStateAuthenticated)
-		}
-	case *logoutCommand:
-		if err == nil {
-			c.setState(imap.ConnStateLogout)
-		}
 	case *ListCommand:
 		if cmd.pendingData != nil {
 			cmd.mailboxes <- cmd.pendingData
@@ -567,6 +605,28 @@ func (c *Client) completeCommand(cmd command, err error) {
 		close(cmd.msgs)
 	case *ExpungeCommand:
 		close(cmd.seqNums)
+	}
+}
+
+// changesMailbox reports whether cmd can change the selected mailbox.
+func changesMailbox(cmd command) bool {
+	switch cmd.(type) {
+	case *SelectCommand, *unselectCommand, *unauthenticateCommand:
+		return true
+	}
+	return false
+}
+
+// setCopyUID stores a COPYUID response code in cmd, if it's a COPY or MOVE.
+func setCopyUID(cmd command, uidValidity uint32, srcUIDs, dstUIDs imap.UIDSet) {
+	if srcUIDs == nil {
+		return // dropped by readRespCodeCopyUID, keep MoveData's fields nil
+	}
+	switch cmd := cmd.(type) {
+	case *CopyCommand:
+		cmd.data = imap.CopyData{UIDValidity: uidValidity, SourceUIDs: srcUIDs, DestUIDs: dstUIDs}
+	case *MoveCommand:
+		cmd.data = MoveData{UIDValidity: uidValidity, SourceUIDs: srcUIDs, DestUIDs: dstUIDs}
 	}
 }
 
@@ -779,18 +839,9 @@ func (c *Client) readResponseTagged(tag, typ string) (startTLS *startTLSCommand,
 			if err != nil {
 				return nil, fmt.Errorf("in resp-code-copy: %w", err)
 			}
-			switch cmd := cmd.(type) {
-			case *CopyCommand:
-				cmd.data.UIDValidity = uidValidity
-				cmd.data.SourceUIDs = srcUIDs
-				cmd.data.DestUIDs = dstUIDs
-			case *MoveCommand:
-				// This can happen when Client.Move falls back to COPY +
-				// STORE + EXPUNGE
-				cmd.data.UIDValidity = uidValidity
-				cmd.data.SourceUIDs = srcUIDs
-				cmd.data.DestUIDs = dstUIDs
-			}
+			// RFC 6851 advises untagged COPYUID for MOVE, but some servers send
+			// it tagged
+			setCopyUID(cmd, uidValidity, srcUIDs, dstUIDs)
 		default: // [SP 1*<any TEXT-CHAR except "]">]
 			if c.dec.SP() {
 				c.dec.DiscardUntilByte(']')
@@ -916,11 +967,16 @@ func (c *Client) readResponseData(typ string) error {
 				if err != nil {
 					return fmt.Errorf("in resp-code-copy: %w", err)
 				}
-				if cmd := findPendingCmdByType[*MoveCommand](c); cmd != nil {
-					cmd.data.UIDValidity = uidValidity
-					cmd.data.SourceUIDs = srcUIDs
-					cmd.data.DestUIDs = dstUIDs
-				}
+				// MOVE sends it untagged (RFC 6851), and so do some servers for
+				// COPY. Replies come in order, so it's for the oldest one.
+				cmd := c.findPendingCmdFunc(func(cmd command) bool {
+					switch cmd.(type) {
+					case *CopyCommand, *MoveCommand:
+						return true
+					}
+					return false
+				})
+				setCopyUID(cmd, uidValidity, srcUIDs, dstUIDs)
 			case "HIGHESTMODSEQ":
 				var modSeq uint64
 				if !c.dec.ExpectSP() || !c.dec.ExpectModSeq(&modSeq) {
